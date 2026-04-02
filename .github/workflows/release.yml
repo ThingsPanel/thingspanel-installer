@@ -124,10 +124,14 @@ jobs:
       - name: Pull and Push
         run: |
           while read img; do
-            docker pull $img
-            ghcr_img=$(echo "$img" | sed 's/registry.cn-hangzhou.aliyuncs.com/ghcr.io/g')
-            docker tag "$img" "$ghcr_img"
-            docker push "$ghcr_img"
+            docker pull "$img"
+            if [[ "$img" == *"registry.cn-hangzhou.aliyuncs.com"* ]]; then
+              ghcr_img=$(echo "$img" | sed 's/registry.cn-hangzhou.aliyuncs.com/ghcr.io/g')
+              docker tag "$img" "$ghcr_img"
+              docker push "$ghcr_img"
+            else
+              echo "Skip pushing $img to GHCR (not an Aliyun registry image)"
+            fi
           done < images.txt
 
   build-windows:

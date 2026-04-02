@@ -12,17 +12,15 @@
     <div class="min-h-screen flex flex-col">
         <!-- Header -->
         <header class="bg-white shadow relative z-10">
-            <div class="max-w-6xl mx-auto px-4 py-5 flex items-center justify-between">
+            <div class="max-w-7xl mx-auto px-4 py-5 flex items-center justify-between">
                 <div class="flex items-center gap-3">
                     <img src="https://thingspanel.io/img/dark.svg" alt="ThingsPanel Logo" class="h-8">
                 </div>
                 <div class="flex items-center gap-6">
-                    <!-- Language Toggle -->
                     <button onclick="toggleLang()" class="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-blue-600 transition">
                         <i class="fas fa-globe"></i>
                         <span id="lang-text">中文</span>
                     </button>
-                    <!-- GitHub Link -->
                     <a href="https://github.com/ThingsPanel/thingspanel-installer" target="_blank" class="text-gray-500 hover:text-gray-900 transition">
                         <i class="fab fa-github text-2xl"></i>
                     </a>
@@ -32,27 +30,28 @@
 
         <!-- Main Banner -->
         <main class="flex-grow">
-            <div class="max-w-6xl mx-auto px-4 py-16">
-                <div class="text-center mb-20 animate-fade-in-up">
+            <div class="max-w-7xl mx-auto px-4 py-16">
+                <div class="text-center mb-16 animate-fade-in-up">
                     <h2 id="main-title" class="text-4xl md:text-5xl text-gray-900 font-extrabold mb-6 tracking-tight">Deploy Enterprise IoT Platform</h2>
                     <p id="main-subtitle" class="text-xl text-gray-500 font-medium">Select your operating system for an automated and secure installation experience.</p>
                 </div>
 
                 <!-- 3 Columns Grid -->
-                <div class="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
+                <div class="grid md:grid-cols-3 gap-8 max-w-6xl mx-auto">
                     
                     <!-- Linux Card -->
                     <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 flex flex-col relative overflow-hidden transition-all hover:shadow-xl hover:-translate-y-1">
                         <div id="badge-recommend" class="absolute top-0 right-0 bg-blue-100 text-blue-800 text-xs font-bold px-3 py-1 rounded-bl-lg tracking-wide uppercase">Server</div>
                         <i class="fab fa-linux text-6xl text-gray-700 mb-8 mx-auto mt-2 tracking-tighter"></i>
-                        <h3 id="linux-title" class="text-2xl font-bold text-center mb-3">Linux</h3>
-                        <p id="linux-desc" class="text-gray-500 text-center mb-8 h-16 leading-relaxed">Supports CentOS, Ubuntu, Debian and macOS via SSH.</p>
+                        <h3 class="text-2xl font-bold text-center mb-3">Linux</h3>
+                        <p id="linux-desc" class="text-gray-500 text-center mb-6 h-12 leading-relaxed">Supports CentOS, Ubuntu, Debian and macOS via SSH.</p>
+                        
                         <div class="mt-auto">
-                            <div id="cmd-hint" class="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Run the following command:</div>
+                            <div class="cmd-hint text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Run the following command:</div>
                             <div class="relative group">
                                 <pre class="bg-gray-900 text-gray-100 text-sm p-4 rounded-xl overflow-x-auto font-mono ring-1 ring-inset ring-gray-800 shadow-inner">curl -fsSL https://install.thingspanel.io/install.sh | sh</pre>
-                                <button onclick="copyCmd()" class="absolute top-2 right-2 text-gray-400 hover:text-white transition p-2 bg-gray-800 rounded opacity-0 group-hover:opacity-100">
-                                    <i id="copy-icon" class="far fa-copy"></i>
+                                <button onclick="copyCmd('curl -fsSL https://install.thingspanel.io/install.sh | sh', this)" class="absolute top-2 right-2 text-gray-400 hover:text-white transition p-2 bg-gray-800 rounded opacity-0 group-hover:opacity-100">
+                                    <i class="far fa-copy"></i>
                                 </button>
                             </div>
                         </div>
@@ -61,10 +60,25 @@
                     <!-- Windows Card -->
                     <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 flex flex-col transition-all hover:shadow-xl hover:-translate-y-1 relative overflow-hidden">
                         <i class="fab fa-windows text-6xl text-blue-500 mb-8 mx-auto mt-2"></i>
-                        <h3 id="win-title" class="text-2xl font-bold text-center mb-3">Windows</h3>
-                        <p id="win-desc" class="text-gray-500 text-center mb-8 h-16 leading-relaxed">Provides a native GUI application installer with zero dependencies.</p>
-                        <div class="mt-auto flex flex-col pt-4">
-                            <a id="btn-win" href="https://github.com/ThingsPanel/thingspanel-installer/releases/latest" target="_blank" class="w-full text-center bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold py-4 px-4 rounded-xl transition-colors shadow-sm flex justify-center items-center gap-2">
+                        <h3 class="text-2xl font-bold text-center mb-3">Windows</h3>
+                        <p id="win-desc" class="text-gray-500 text-center mb-6 h-12 leading-relaxed">Provides a native GUI application installer with zero dependencies.</p>
+                        
+                        <div class="mt-auto flex flex-col">
+                            <div class="cmd-hint text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Run the following command:</div>
+                            <div class="relative group mb-4">
+                                <pre class="bg-gray-900 text-gray-100 text-sm p-4 rounded-xl overflow-x-auto font-mono ring-1 ring-inset ring-gray-800 shadow-inner">irm https://install.thingspanel.io/install.ps1 | iex</pre>
+                                <button onclick="copyCmd('irm https://install.thingspanel.io/install.ps1 | iex', this)" class="absolute top-2 right-2 text-gray-400 hover:text-white transition p-2 bg-gray-800 rounded opacity-0 group-hover:opacity-100">
+                                    <i class="far fa-copy"></i>
+                                </button>
+                            </div>
+                            
+                            <div class="flex items-center gap-4 mb-4">
+                                <div class="flex-grow h-px bg-gray-100"></div>
+                                <span class="or-text text-xs text-gray-400 font-medium uppercase tracking-wider">OR</span>
+                                <div class="flex-grow h-px bg-gray-100"></div>
+                            </div>
+
+                            <a id="btn-win" href="https://github.com/ThingsPanel/thingspanel-installer/releases/latest" target="_blank" class="w-full text-center bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold py-3 px-4 rounded-xl transition-colors shadow-sm flex justify-center items-center gap-2">
                                 <i class="fas fa-download"></i> <span id="win-btn-text">Download .exe Installer</span>
                             </a>
                         </div>
@@ -73,10 +87,25 @@
                     <!-- macOS Card -->
                     <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 flex flex-col transition-all hover:shadow-xl hover:-translate-y-1 relative overflow-hidden">
                         <i class="fab fa-apple text-6xl text-gray-900 mb-8 mx-auto mt-2"></i>
-                        <h3 id="mac-title" class="text-2xl font-bold text-center mb-3">macOS</h3>
-                        <p id="mac-desc" class="text-gray-500 text-center mb-8 h-16 leading-relaxed">Native support for Apple Silicon & Intel via Docker Desktop.</p>
-                        <div class="mt-auto flex flex-col pt-4">
-                            <a id="btn-mac" href="https://github.com/ThingsPanel/thingspanel-installer/releases/latest" target="_blank" class="w-full text-center bg-gray-900 hover:bg-black active:bg-gray-800 text-white font-semibold py-4 px-4 rounded-xl transition-colors shadow-sm flex justify-center items-center gap-2">
+                        <h3 class="text-2xl font-bold text-center mb-3">macOS</h3>
+                        <p id="mac-desc" class="text-gray-500 text-center mb-6 h-12 leading-relaxed">Native support for Apple Silicon & Intel via Docker Desktop.</p>
+                        
+                        <div class="mt-auto flex flex-col">
+                            <div class="cmd-hint text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Run the following command:</div>
+                            <div class="relative group mb-4">
+                                <pre class="bg-gray-900 text-gray-100 text-sm p-4 rounded-xl overflow-x-auto font-mono ring-1 ring-inset ring-gray-800 shadow-inner">curl -fsSL https://install.thingspanel.io/install.sh | sh</pre>
+                                <button onclick="copyCmd('curl -fsSL https://install.thingspanel.io/install.sh | sh', this)" class="absolute top-2 right-2 text-gray-400 hover:text-white transition p-2 bg-gray-800 rounded opacity-0 group-hover:opacity-100">
+                                    <i class="far fa-copy"></i>
+                                </button>
+                            </div>
+                            
+                            <div class="flex items-center gap-4 mb-4">
+                                <div class="flex-grow h-px bg-gray-100"></div>
+                                <span class="or-text text-xs text-gray-400 font-medium uppercase tracking-wider">OR</span>
+                                <div class="flex-grow h-px bg-gray-100"></div>
+                            </div>
+
+                            <a id="btn-mac" href="https://github.com/ThingsPanel/thingspanel-installer/releases/latest" target="_blank" class="w-full text-center bg-gray-900 hover:bg-black active:bg-gray-800 text-white font-semibold py-3 px-4 rounded-xl transition-colors shadow-sm flex justify-center items-center gap-2">
                                 <i class="fas fa-download"></i> <span id="mac-btn-text">Download .pkg Installer</span>
                             </a>
                         </div>
@@ -84,9 +113,8 @@
 
                 </div>
 
-                <!-- Footer Links -->
                 <div class="mt-20 text-center text-sm font-medium text-gray-500">
-                    <p><span id="docs-hint">Installation issues? Check the</span> <a href="https://github.com/ThingsPanel/thingspanel-installer#readme" target="_blank" class="text-blue-600 hover:text-blue-800 hover:underline underline-offset-4 transition">Documentation</a></p>
+                    <p><span id="docs-hint">Installation issues? Check the</span> <a href="https://github.com/ThingsPanel/thingspanel-installer#readme" target="_blank" class="text-blue-600 hover:text-blue-800 hover:underline underline-offset-4 transition text-docs-link">Documentation</a></p>
                 </div>
             </div>
         </main>
@@ -99,11 +127,9 @@
         </footer>
     </div>
 
-    <!-- 逻辑脚本 -->
     <script>
         document.getElementById('year').textContent = new Date().getFullYear();
 
-        // 国际化文案
         const i18n = {
             en: {
                 langBtn: "中文",
@@ -116,7 +142,9 @@
                 winBtn: "Download .exe Installer",
                 macDesc: "Native support for Apple Silicon & Intel via Docker Desktop.",
                 macBtn: "Download .pkg Installer",
-                docs: "Installation issues? Check the"
+                docs: "Installation issues? Check the",
+                docsLink: "Documentation",
+                orText: "OR"
             },
             zh: {
                 langBtn: "English",
@@ -124,12 +152,14 @@
                 subtitle: "选择您的操作系统，获取安全、自动化、全封装的安装体验。",
                 badge: "推荐 (服务器)",
                 linuxDesc: "支持 CentOS, Ubuntu, Debian 及通过 SSH 访问的 macOS。",
-                cmdHint: "执行以下一键安装命令：",
+                cmdHint: "执行该命令一键部署：",
                 winDesc: "提供带界面的绿色安装程序，纯净直接运行。",
                 winBtn: "下载 .exe 安装包",
                 macDesc: "原生跨平台架构支持，基于 Docker Desktop 分发。",
                 macBtn: "下载 .pkg 安装包",
-                docs: "安装遇到问题？请参考"
+                docs: "安装遇到问题？请参考",
+                docsLink: "官方文档",
+                orText: "或者"
             }
         };
 
@@ -149,12 +179,14 @@
             document.getElementById('main-subtitle').innerText = t.subtitle;
             document.getElementById('badge-recommend').innerText = t.badge;
             document.getElementById('linux-desc').innerText = t.linuxDesc;
-            document.getElementById('cmd-hint').innerText = t.cmdHint;
             document.getElementById('win-desc').innerText = t.winDesc;
             document.getElementById('mac-desc').innerText = t.macDesc;
             document.getElementById('docs-hint').innerText = t.docs;
+            document.querySelector('.text-docs-link').innerText = t.docsLink;
 
-            // 保持如果已经动态获取了链接时的特定提示
+            document.querySelectorAll('.cmd-hint').forEach(el => el.innerText = t.cmdHint);
+            document.querySelectorAll('.or-text').forEach(el => el.innerText = t.orText);
+
             if (!hasFetched) {
                 document.getElementById('win-btn-text').innerText = t.winBtn;
                 document.getElementById('mac-btn-text').innerText = t.macBtn;
@@ -163,7 +195,6 @@
             }
         }
 
-        // 动态获取 GitHub 的 Latest Release 链接
         let hasFetched = false;
         async function fetchLatestRelease() {
             try {
@@ -185,14 +216,11 @@
                     document.getElementById('btn-win').href = winUrl;
                     hasFetched = true;
                 }
-                
                 if (macUrl) {
                     document.getElementById('btn-mac').href = macUrl;
                     hasFetched = true;
                 }
-
                 updateDownloadButtonText();
-
             } catch (err) {
                 console.error("Failed to fetch GitHub release", err);
             }
@@ -200,23 +228,19 @@
 
         function updateDownloadButtonText() {
             if (!hasFetched) return;
-            const t = currentLang === 'en' ? "Download Now" : "立即下载";
-            document.getElementById('win-btn-text').innerText = currentLang === 'en' ? "Download Windows" : "Windows 下载";
-            document.getElementById('mac-btn-text').innerText = currentLang === 'en' ? "Download macOS" : "macOS 下载";
+            document.getElementById('win-btn-text').innerText = currentLang === 'en' ? "Download Windows" : "立即下载 Windows 版本";
+            document.getElementById('mac-btn-text').innerText = currentLang === 'en' ? "Download macOS" : "立即下载 macOS 版本";
         }
 
-        // 一键复制命令
-        function copyCmd() {
-            navigator.clipboard.writeText('curl -fsSL https://install.thingspanel.io/install.sh | sh');
-            
-            const icon = document.getElementById('copy-icon');
+        function copyCmd(text, btn) {
+            navigator.clipboard.writeText(text);
+            const icon = btn.querySelector('i');
             icon.className = 'fas fa-check text-green-400';
             setTimeout(() => {
                 icon.className = 'far fa-copy';
             }, 2000);
         }
 
-        // 初始化
         fetchLatestRelease();
         applyTranslations();
     </script>

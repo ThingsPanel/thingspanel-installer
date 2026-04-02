@@ -132,12 +132,12 @@ jobs:
       - name: Create placeholder resources (if not exists)
         run: |
           mkdir -p packaging/macos/resources
-          # 创建占位 HTML 资源（正式发布时替换为真实内容）
           [ -f packaging/macos/resources/welcome.html ]    || echo "<html><body><h2>欢迎安装 ThingsPanel</h2></body></html>" > packaging/macos/resources/welcome.html
-          [ -f packaging/macos/resources/readme.html ]     || echo "<html><body><h2>说明</h2><p>ThingsPanel 是一个开源 IoT 平台。</p></body></html>" > packaging/macos/resources/readme.html
+          [ -f packaging/macos/resources/readme.html ]     || echo "<html><body><h2>说明</h2><p>ThingsPanel 是一个开...</p></body></html>" > packaging/macos/resources/readme.html
           [ -f packaging/macos/resources/license.html ]    || echo "<html><body><h2>许可证</h2><p>Apache 2.0</p></body></html>" > packaging/macos/resources/license.html
           [ -f packaging/macos/resources/conclusion.html ] || echo "<html><body><h2>安装完成</h2><p>访问 http://localhost:8080</p></body></html>" > packaging/macos/resources/conclusion.html
-          [ -f packaging/macos/resources/background.png ]  || echo "placeholder" > packaging/macos/resources/background.png
+          # 生成一个 1x1 透明 PNG 占位，防止 productbuild 报错
+          [ -f packaging/macos/resources/background.png ]  || echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=" | base64 -d > packaging/macos/resources/background.png
 
       - name: Make scripts executable
         run: |
@@ -148,8 +148,6 @@ jobs:
       - name: Build macOS installer
         env:
           TP_VERSION: ${{ needs.prepare.outputs.version }}
-          # 可选：设置 APPLE_DEVELOPER_ID 进行代码签名
-          # APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
         run: ./packaging/macos/build.sh
 
       - name: Upload macOS artifact
@@ -183,6 +181,7 @@ jobs:
       - name: Generate SHA256 checksums
         run: |
           cd dist
+          touch SHA256SUMS.txt
           find . -type f \( -name "*.exe" -o -name "*.pkg" \) | sort | while read f; do
             sha256sum "$f" >> SHA256SUMS.txt
           done

@@ -1,0 +1,33 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ThingsPanel All-in-One — .gitignore
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 环境变量（含密码，绝对不入库）
+.env
+*.env.local
+
+# 数据目录
+data/
+images/
+
+# 构建产物
+dist/
+
+# macOS
+.DS_Store
+__MACOSX/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# 临时文件
+packaging/macos/.build/
+*.bak
+*.bak.*
+packaging/macos/resources/background.png
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp

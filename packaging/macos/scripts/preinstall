@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# macOS pkg — preinstall 脚本
+# 检查 Docker Desktop 是否安装
+set -e
+
+DOCKER_APP="/Applications/Docker.app"
+
+if [ ! -d "$DOCKER_APP" ]; then
+    osascript -e 'display dialog "ThingsPanel 需要 Docker Desktop。\n\n请先从 https://www.docker.com/products/docker-desktop 下载安装 Docker Desktop，然后重新运行此安装包。" buttons {"打开下载页面", "取消"} default button "打开下载页面" with icon stop' 2>/dev/null && \
+    open "https://www.docker.com/products/docker-desktop" || true
+    exit 1
+fi
+
+exit 0

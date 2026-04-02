@@ -1,0 +1,227 @@
+name: Release — Build & Publish Installers
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'                   # 正式版本：v1.2.0
+      - 'v*.*.*.*'                  # 子版本：v1.1.13.6
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（如 v1.2.0）"
+        required: true
+        type: string
+      push_latest:
+        description: "同时更新 latest 标签"
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: registry.cn-hangzhou.aliyuncs.com/thingspanel
+
+jobs:
+
+  # ── 确定版本号 ──────────────────────────────────────────────────────────────
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        name: Resolve version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Version: ${VERSION}"
+
+  # ── 验证 docker-compose.yml 语法 ───────────────────────────────────────────
+  validate:
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create test .env
+        run: |
+          cat > .env << 'EOF'
+          POSTGRES_PASSWORD=test_pg_pass
+          REDIS_PASSWORD=test_redis_pass
+          AUTH_SECRET=test_auth_secret_minimum_32_chars_long
+          TP_VERSION=${{ needs.prepare.outputs.version }}
+          TP_VUE_VERSION=${{ needs.prepare.outputs.version }}
+          TP_BACKEND_VERSION=${{ needs.prepare.outputs.version }}
+          TP_GMQTT_VERSION=v1.1.6
+          TP_REDIS_VERSION=6.2.7
+          TP_MODBUS_VERSION=v1.0.6.1
+          TP_HTTP_ADAPTER_VERSION=v1.0.0
+          TP_THINGSVIS_SERVER_VERSION=v1.0.4
+          TP_THINGSVIS_STUDIO_VERSION=v1.0.4
+          TP_TIMESCALEDB_VERSION=14
+          DATA_DIR=./data
+          HTTP_PORT=8080
+          MQTT_PORT=1883
+          MODBUS_TCP_PORT=502
+          MODBUS_RTU_PORT=503
+          TZ=Asia/Shanghai
+          TP_LOG_LEVEL=error
+          EOF
+
+      - name: Validate docker-compose syntax
+        run: docker compose config --quiet
+
+      - name: Check script syntax (bash)
+        run: |
+          bash -n install.sh
+          bash -n upgrade.sh
+          bash -n uninstall.sh
+
+  # ── 构建 Windows 安装包 ─────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    needs: [prepare, validate]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Create placeholder icon (if not exists)
+        shell: pwsh
+        run: |
+          $iconDir = "packaging\windows\assets"
+          if (-not (Test-Path "$iconDir\thingspanel.ico")) {
+            # 使用系统图标作为占位符（CI 环境）
+            Copy-Item "$env:SystemRoot\System32\shell32.dll" "$iconDir\thingspanel.ico" -ErrorAction SilentlyContinue || true
+          }
+          if (-not (Test-Path "$iconDir\sidebar.bmp")) {
+            # 创建最小占位 BMP
+            [System.IO.File]::WriteAllBytes("$iconDir\sidebar.bmp", [byte[]]@(66,77,58,0,0,0,0,0,0,0,54,0,0,0,40,0,0,0,1,0,0,0,1,0,0,0,1,0,24,0,0,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,96,0))
+          }
+
+      - name: Build Windows installer
+        shell: cmd
+        env:
+          TP_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir dist\windows 2>nul || true
+          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DTP_VERSION=%TP_VERSION% packaging\windows\ThingsPanel-Setup.iss
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/windows/ThingsPanel-Setup-*.exe
+          retention-days: 7
+
+  # ── 构建 macOS 安装包 ───────────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+    needs: [prepare, validate]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create placeholder resources (if not exists)
+        run: |
+          mkdir -p packaging/macos/resources
+          # 创建占位 HTML 资源（正式发布时替换为真实内容）
+          [ -f packaging/macos/resources/welcome.html ]    || echo "<html><body><h2>欢迎安装 ThingsPanel</h2></body></html>" > packaging/macos/resources/welcome.html
+          [ -f packaging/macos/resources/readme.html ]     || echo "<html><body><h2>说明</h2><p>ThingsPanel 是一个开源 IoT 平台。</p></body></html>" > packaging/macos/resources/readme.html
+          [ -f packaging/macos/resources/license.html ]    || echo "<html><body><h2>许可证</h2><p>Apache 2.0</p></body></html>" > packaging/macos/resources/license.html
+          [ -f packaging/macos/resources/conclusion.html ] || echo "<html><body><h2>安装完成</h2><p>访问 http://localhost:8080</p></body></html>" > packaging/macos/resources/conclusion.html
+          [ -f packaging/macos/resources/background.png ]  || echo "placeholder" > packaging/macos/resources/background.png
+
+      - name: Make scripts executable
+        run: |
+          chmod +x packaging/macos/build.sh
+          chmod +x packaging/macos/scripts/preinstall
+          chmod +x packaging/macos/scripts/postinstall
+
+      - name: Build macOS installer
+        env:
+          TP_VERSION: ${{ needs.prepare.outputs.version }}
+          # 可选：设置 APPLE_DEVELOPER_ID 进行代码签名
+          # APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+        run: ./packaging/macos/build.sh
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer
+          path: dist/macos/ThingsPanel-*.pkg
+          retention-days: 7
+
+  # ── 发布 GitHub Release ─────────────────────────────────────────────────────
+  release:
+    runs-on: ubuntu-latest
+    needs: [prepare, build-windows, build-macos]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/windows
+
+      - name: Download macOS installer
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-installer
+          path: dist/macos
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd dist
+          find . -type f \( -name "*.exe" -o -name "*.pkg" \) | sort | while read f; do
+            sha256sum "$f" >> SHA256SUMS.txt
+          done
+          cat SHA256SUMS.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.version }}
+          name: "ThingsPanel All-in-One ${{ needs.prepare.outputs.version }}"
+          body: |
+            ## ThingsPanel All-in-One ${{ needs.prepare.outputs.version }}
+
+            ### 快速安装
+
+            **Linux / macOS（推荐）**
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/ThingsPanel/all-in-one-assembler/main/install.sh | sh
+            ```
+
+            **Windows**
+            下载下方 `ThingsPanel-Setup-*.exe`，右键"以管理员身份运行"。
+
+            **macOS（图形界面）**
+            下载下方 `ThingsPanel-*.pkg`，双击安装。
+
+            ### 前置要求
+            - Docker Desktop（Windows / macOS）或 Docker Engine（Linux）
+            - 内存 ≥ 2GB
+
+            ### 文件说明
+            | 文件 | 平台 | 说明 |
+            |------|------|------|
+            | `ThingsPanel-Setup-*.exe` | Windows | Inno Setup 安装向导 |
+            | `ThingsPanel-*.pkg` | macOS | macOS 安装包 |
+            | `install.sh` | Linux/macOS | 一行命令安装脚本 |
+          draft: false
+          prerelease: ${{ contains(needs.prepare.outputs.version, 'rc') || contains(needs.prepare.outputs.version, 'beta') }}
+          files: |
+            dist/windows/*.exe
+            dist/macos/*.pkg
+            dist/SHA256SUMS.txt

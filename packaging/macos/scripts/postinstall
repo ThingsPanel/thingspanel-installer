@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# macOS pkg — postinstall 脚本
+# 安装完成后自动运行 install.sh
+set -e
+
+INSTALL_DIR="/opt/thingspanel"
+
+# 确保脚本可执行
+chmod +x "$INSTALL_DIR"/*.sh
+
+# 检查 Docker Desktop 是否运行
+DOCKER_RUNNING=false
+for i in $(seq 1 10); do
+    if /usr/local/bin/docker info >/dev/null 2>&1 || \
+       /usr/bin/docker info >/dev/null 2>&1; then
+        DOCKER_RUNNING=true
+        break
+    fi
+    # 尝试启动 Docker Desktop
+    if [ "$i" -eq 1 ]; then
+        open -a Docker || true
+    fi
+    sleep 3
+done
+
+if ! $DOCKER_RUNNING; then
+    osascript -e 'display dialog "Docker Desktop 未运行。\n\n请启动 Docker Desktop 后，打开终端运行：\n  sudo /opt/thingspanel/install.sh" buttons {"好的"} default button "好的" with icon caution' 2>/dev/null || true
+    exit 0
+fi
+
+# 在后台运行安装脚本（避免 pkg 安装界面卡住）
+nohup bash "$INSTALL_DIR/install.sh" \
+    --install-dir "$INSTALL_DIR" \
+    > /var/log/thingspanel-install.log 2>&1 &
+
+osascript -e 'display notification "ThingsPanel 正在后台启动，请稍候..." with title "ThingsPanel"' 2>/dev/null || true
+
+exit 0

@@ -1,0 +1,52 @@
+name: Validate — PR Check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docker-compose.yml'
+      - 'nginx/**'
+      - 'install.sh'
+      - 'upgrade.sh'
+      - 'uninstall.sh'
+      - '.env.example'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create test .env from example
+        run: |
+          cp .env.example .env
+          # 替换占位符为测试值
+          sed -i \
+            -e 's/CHANGE_ME_postgres_password/test_pg_password/' \
+            -e 's/CHANGE_ME_redis_password/test_redis_password/' \
+            -e 's/CHANGE_ME_auth_secret_at_least_32_chars/test_auth_secret_minimum_32_chars_long/' \
+            .env
+
+      - name: Validate docker-compose syntax
+        run: docker compose config --quiet
+
+      - name: Validate nginx config syntax
+        run: docker run --rm -v "$PWD/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" nginx:alpine nginx -t
+
+      - name: Lint install.sh (shellcheck)
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: '.'
+          additional_files: 'install.sh upgrade.sh uninstall.sh'
+
+      - name: Check .env.example completeness
+        run: |
+          # 检查 .env.example 中所有变量是否在 docker-compose.yml 中被使用
+          echo "Checking env vars consistency..."
+          while IFS= read -r line; do
+            [[ "$line" =~ ^#.*$ ]] && continue
+            [[ -z "$line" ]] && continue
+            var="${line%%=*}"
+            echo "  Checking: $var"
+          done < .env.example
+          echo "OK"

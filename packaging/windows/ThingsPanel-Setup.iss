@@ -130,3 +130,4 @@ begin
     end;
   end;
 end;
+Source: "..\..\images.tar"; DestDir: "{app}"; Flags: ignoreversion

@@ -85,9 +85,51 @@ jobs:
           bash -n uninstall.sh
 
   # ── 构建 Windows 安装包 ─────────────────────────────────────────────────────
+  # ── 镜像推送到 GHCR (可选) ──────────────────────────────────────────────────
+  sync-ghcr:
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create .env
+        run: |
+          touch .env
+          echo "TP_VERSION=${{ needs.prepare.outputs.version }}" >> .env
+          echo "TP_VUE_VERSION=${{ needs.prepare.outputs.version }}" >> .env
+          echo "TP_BACKEND_VERSION=${{ needs.prepare.outputs.version }}" >> .env
+          echo "TP_GMQTT_VERSION=v1.1.6" >> .env
+          echo "TP_REDIS_VERSION=6.2.7" >> .env
+          echo "TP_MODBUS_VERSION=v1.0.6.1" >> .env
+          echo "TP_HTTP_ADAPTER_VERSION=v1.0.0" >> .env
+          echo "TP_THINGSVIS_SERVER_VERSION=v1.0.4" >> .env
+          echo "TP_THINGSVIS_STUDIO_VERSION=v1.0.4" >> .env
+          echo "TP_TIMESCALEDB_VERSION=14" >> .env
+          echo "POSTGRES_PASSWORD=1" >> .env
+          echo "REDIS_PASSWORD=1" >> .env
+          echo "AUTH_SECRET=1" >> .env
+          echo "DATA_DIR=./data" >> .env
+      - name: Use Aliyun to list images
+        run: |
+          echo "DOCKER_REGISTRY=registry.cn-hangzhou.aliyuncs.com" >> .env
+          docker compose config --images > images.txt
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull and Push
+        run: |
+          while read img; do
+            docker pull $img
+            ghcr_img=$(echo "$img" | sed 's/registry.cn-hangzhou.aliyuncs.com/ghcr.io/g')
+            docker tag "$img" "$ghcr_img"
+            docker push "$ghcr_img"
+          done < images.txt
+
   build-windows:
     runs-on: windows-latest
-    needs: [prepare, validate]
+    needs: [prepare, validate, sync-ghcr]
     steps:
       - uses: actions/checkout@v4
 
@@ -107,6 +149,21 @@ jobs:
             [System.IO.File]::WriteAllBytes("$iconDir\sidebar.bmp", [byte[]]@(66,77,58,0,0,0,0,0,0,0,54,0,0,0,40,0,0,0,1,0,0,0,1,0,0,0,1,0,24,0,0,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,96,0))
           }
 
+      - name: Download Docker images for offline bundle
+        env:
+          TP_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          echo "POSTGRES_PASSWORD=1" > .env
+          echo "REDIS_PASSWORD=1" >> .env
+          echo "AUTH_SECRET=1" >> .env
+          echo "TP_VERSION=$TP_VERSION" >> .env
+          echo "TP_VUE_VERSION=$TP_VERSION" >> .env
+          echo "TP_BACKEND_VERSION=$TP_VERSION" >> .env
+          echo "DOCKER_REGISTRY=registry.cn-hangzhou.aliyuncs.com" >> .env
+          docker compose pull
+          docker save $(docker compose config --images) -o images.tar
+        shell: bash
+
       - name: Build Windows installer
         shell: cmd
         env:
@@ -125,7 +182,7 @@ jobs:
   # ── 构建 macOS 安装包 ───────────────────────────────────────────────────────
   build-macos:
     runs-on: macos-latest
-    needs: [prepare, validate]
+    needs: [prepare, validate, sync-ghcr]
     steps:
       - uses: actions/checkout@v4
 
@@ -144,6 +201,20 @@ jobs:
           chmod +x packaging/macos/build.sh
           chmod +x packaging/macos/scripts/preinstall
           chmod +x packaging/macos/scripts/postinstall
+
+      - name: Download Docker images for offline bundle
+        env:
+          TP_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          echo "POSTGRES_PASSWORD=1" > .env
+          echo "REDIS_PASSWORD=1" >> .env
+          echo "AUTH_SECRET=1" >> .env
+          echo "TP_VERSION=$TP_VERSION" >> .env
+          echo "TP_VUE_VERSION=$TP_VERSION" >> .env
+          echo "TP_BACKEND_VERSION=$TP_VERSION" >> .env
+          echo "DOCKER_REGISTRY=registry.cn-hangzhou.aliyuncs.com" >> .env
+          docker compose pull
+          docker save $(docker compose config --images) -o images.tar
 
       - name: Build macOS installer
         env:

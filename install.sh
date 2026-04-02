@@ -15,7 +15,7 @@
 #   MQTT_PORT       MQTT 端口，默认 1883
 #   INSTALL_DIR     安装目录，默认 /opt/thingspanel
 # ─────────────────────────────────────────────────────────────────────────────
-set -euo pipefail
+set -eu
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 REPO="ThingsPanel/all-in-one-assembler"
@@ -101,6 +101,32 @@ check_docker() {
     fi
 }
 
+check_mirror() {
+    step "选择镜像源"
+    local aliyun_url="https://registry.cn-hangzhou.aliyuncs.com"
+    local ghcr_url="https://ghcr.io"
+    
+    # Check GitHub Container Registry connection
+    local ghcr_time=999
+    local aliyun_time=999
+    
+    if command_exists curl; then
+        aliyun_time=$(curl -o /dev/null -s -w "%{time_total}
+" -m 3 $aliyun_url || echo 999)
+        ghcr_time=$(curl -o /dev/null -s -w "%{time_total}
+" -m 3 $ghcr_url || echo 999)
+    fi
+    
+    # 简单的网速比较 (如果 aliyun_time < ghcr_time，或者GHCR超时，就选阿里云)
+    if [ "$(echo "$aliyun_time < $ghcr_time" | bc -l 2>/dev/null || echo 1)" = "1" ]; then
+        DOCKER_REGISTRY="registry.cn-hangzhou.aliyuncs.com"
+        info "使用阿里云镜像源 (延迟: ${aliyun_time}s)"
+    else
+        DOCKER_REGISTRY="ghcr.io"
+        info "使用 GHCR 镜像源 (延迟: ${ghcr_time}s)"
+    fi
+}
+
 check_ports() {
     step "检测端口占用"
     local ports=("$HTTP_PORT" "$MQTT_PORT")
@@ -147,11 +173,12 @@ resolve_version() {
     else
         # 从 GitHub API 获取最新版本
         if command_exists curl; then
-            VERSION=$(curl -fsSL \
-                "https://api.github.com/repos/${REPO}/releases/latest" \
-                2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+            VERSION=$(curl -fsSL                 "https://api.github.com/repos/${REPO}/releases/latest"                 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*//' || true)
         fi
         VERSION="${VERSION:-v1.1.13.6}"
+        if [ -z "$VERSION" ]; then
+            VERSION="v1.1.13.6"
+        fi
         info "最新版本: $VERSION"
     fi
     success "将安装版本: $VERSION"
@@ -204,6 +231,7 @@ generate_env() {
 # ThingsPanel All-in-One — 自动生成于 $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # 请妥善保管此文件，其中包含数据库密码等敏感信息
 
+DOCKER_REGISTRY=${DOCKER_REGISTRY}
 TP_VERSION=${VERSION}
 TP_VUE_VERSION=${VERSION}
 TP_BACKEND_VERSION=${VERSION}
@@ -238,9 +266,15 @@ start_services() {
     step "启动 ThingsPanel 服务"
     cd "$INSTALL_DIR"
 
-    # 拉取最新镜像
-    info "拉取镜像（首次可能需要 3-5 分钟，取决于网速）..."
-    docker compose pull --quiet
+    if [ -f "$INSTALL_DIR/images.tar" ]; then
+        info "发现本地离线镜像 images.tar，正在加载（这可能需要几分钟）..."
+        docker load -i "$INSTALL_DIR/images.tar" || warn "镜像加载失败，将尝试在线拉取"
+        success "离线镜像已加载"
+    else
+        # 拉取最新镜像
+        info "拉取镜像（首次可能需要 3-5 分钟，取决于网速）..."
+        docker compose pull --quiet
+    fi
 
     # 启动并等待所有 healthcheck 通过
     info "启动服务，等待健康检查通过..."
@@ -317,6 +351,7 @@ main() {
     print_banner
     check_os
     check_docker
+    check_mirror
     check_ports
     check_memory
     resolve_version

@@ -40,6 +40,7 @@ cp "$ROOT_DIR/upgrade.sh"            "$PAYLOAD_DIR/opt/thingspanel/"
 cp "$ROOT_DIR/uninstall.sh"          "$PAYLOAD_DIR/opt/thingspanel/"
 mkdir -p "$PAYLOAD_DIR/opt/thingspanel/nginx"
 cp "$ROOT_DIR/nginx/nginx.conf"      "$PAYLOAD_DIR/opt/thingspanel/nginx/"
+[ -f "$ROOT_DIR/images.tar" ] && cp "$ROOT_DIR/images.tar" "$PAYLOAD_DIR/opt/thingspanel/" || true
 chmod +x "$PAYLOAD_DIR/opt/thingspanel/"*.sh
 
 # ── 构建组件包 ────────────────────────────────────────────────────────────────

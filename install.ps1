@@ -118,6 +118,44 @@ function Test-Ports {
 }
 
 # ── 确定版本 ──────────────────────────────────────────────────────────────────
+function Test-Registry {
+    Write-Step "选择镜像源"
+    try {
+        $aliyun = Measure-Command { Invoke-WebRequest "https://registry.cn-hangzhou.aliyuncs.com" -TimeoutSec 3 -ErrorAction SilentlyContinue }
+        $ghcr = Measure-Command { Invoke-WebRequest "https://ghcr.io" -TimeoutSec 3 -ErrorAction SilentlyContinue }
+        
+        if ($aliyun.TotalMilliseconds -lt $ghcr.TotalMilliseconds) {
+            $script:DockerRegistry = "registry.cn-hangzhou.aliyuncs.com"
+            Write-Info "使用 阿里云 镜像源 (延迟: $($aliyun.TotalMilliseconds) ms)"
+        } else {
+            $script:DockerRegistry = "ghcr.io"
+            Write-Info "使用 GHCR 镜像源 (延迟: $($ghcr.TotalMilliseconds) ms)"
+        }
+    } catch {
+        $script:DockerRegistry = "registry.cn-hangzhou.aliyuncs.com"
+        Write-Info "测试请求超时，默认使用 阿里云 镜像源"
+    }
+}
+
+function Test-Registry {
+    Write-Step "选择镜像源"
+    try {
+        $aliyun_start = Get-Date; Invoke-WebRequest "https://registry.cn-hangzhou.aliyuncs.com" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue >$null; $aliyun = ((Get-Date) - $aliyun_start).TotalMilliseconds
+        $ghcr_start = Get-Date; Invoke-WebRequest "https://ghcr.io" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue >$null; $ghcr = ((Get-Date) - $ghcr_start).TotalMilliseconds
+        
+        if ($aliyun -lt $ghcr) {
+            $script:DockerRegistry = "registry.cn-hangzhou.aliyuncs.com"
+            Write-Info ("使用 阿里云 镜像源 (延迟: {0} ms)" -f [math]::Round($aliyun))
+        } else {
+            $script:DockerRegistry = "ghcr.io"
+            Write-Info ("使用 GHCR 镜像源 (延迟: {0} ms)" -f [math]::Round($ghcr))
+        }
+    } catch {
+        $script:DockerRegistry = "registry.cn-hangzhou.aliyuncs.com"
+        Write-Info "测试请求超时，使用默认 阿里云 镜像源"
+    }
+}
+
 function Resolve-TpVersion {
     Write-Step "确定安装版本"
 
@@ -194,6 +232,7 @@ function New-EnvFile {
 # ThingsPanel All-in-One — 自动生成于 $timestamp
 # 请妥善保管此文件，其中包含数据库密码等敏感信息
 
+DOCKER_REGISTRY=$($script:DockerRegistry)
 TP_VERSION=$($script:TpVersion)
 TP_VUE_VERSION=$($script:TpVersion)
 TP_BACKEND_VERSION=$($script:TpVersion)
@@ -303,6 +342,7 @@ function Write-Finish {
 function Main {
     Write-Banner
     Test-Docker
+    Test-Registry
     Test-Ports
     Resolve-TpVersion
     Initialize-Directories

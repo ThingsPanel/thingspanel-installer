@@ -11,7 +11,7 @@ services:
 
   # ── 数据库 (TimescaleDB) ────────────────────────────────────────────────────
   postgres:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/timescaledb:${TP_TIMESCALEDB_VERSION:-14}
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/thingspanel/timescaledb:${TP_TIMESCALEDB_VERSION:-14}
     container_name: tp-postgres
     restart: unless-stopped
     environment:
@@ -34,7 +34,7 @@ services:
 
   # ── 缓存 (Redis) ─────────────────────────────────────────────────────────────
   redis:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/redis:${TP_REDIS_VERSION:-6.2.7}
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/thingspanel/redis:${TP_REDIS_VERSION:-6.2.7}
     container_name: tp-redis
     restart: unless-stopped
     command: redis-server --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
@@ -51,7 +51,7 @@ services:
 
   # ── MQTT Broker (GMQTT) ──────────────────────────────────────────────────────
   gmqtt:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-gmqtt:${TP_GMQTT_VERSION:-v1.1.6}
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/thingspanel/thingspanel-gmqtt:${TP_GMQTT_VERSION:-v1.1.6}
     container_name: tp-gmqtt
     restart: unless-stopped
     depends_on:
@@ -75,7 +75,7 @@ services:
 
   # ── 后端 API (ThingsPanel-Go) ─────────────────────────────────────────────────
   backend:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:${TP_BACKEND_VERSION:-v1.1.13.6}
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/thingspanel/thingspanel-go:${TP_BACKEND_VERSION:-v1.1.13.6}
     container_name: tp-backend
     restart: unless-stopped
     depends_on:
@@ -113,7 +113,7 @@ services:
 
   # ── Modbus 协议插件 ───────────────────────────────────────────────────────────
   modbus:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/modbus-protocol-plugin:${TP_MODBUS_VERSION:-v1.0.6.1}
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/thingspanel/modbus-protocol-plugin:${TP_MODBUS_VERSION:-v1.0.6.1}
     container_name: tp-modbus
     restart: unless-stopped
     depends_on:
@@ -133,7 +133,7 @@ services:
 
   # ── HTTP 协议适配器 ────────────────────────────────────────────────────────────
   http-adapter:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-adapter-http:${TP_HTTP_ADAPTER_VERSION:-v1.0.0}
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/thingspanel/thingspanel-adapter-http:${TP_HTTP_ADAPTER_VERSION:-v1.0.0}
     container_name: tp-http-adapter
     restart: unless-stopped
     depends_on:
@@ -150,7 +150,7 @@ services:
 
   # ── ThingsVis Server ──────────────────────────────────────────────────────────
   thingsvis-server:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-server:${TP_THINGSVIS_SERVER_VERSION:-v1.0.4}
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/thingspanel/thingsvis-server:${TP_THINGSVIS_SERVER_VERSION:-v1.0.4}
     container_name: tp-thingsvis-server
     restart: unless-stopped
     depends_on:
@@ -167,7 +167,7 @@ services:
 
   # ── ThingsVis Studio ──────────────────────────────────────────────────────────
   thingsvis-studio:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-studio:${TP_THINGSVIS_STUDIO_VERSION:-v1.0.4}
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/thingspanel/thingsvis-studio:${TP_THINGSVIS_STUDIO_VERSION:-v1.0.4}
     container_name: tp-thingsvis-studio
     restart: unless-stopped
     environment:
@@ -183,7 +183,7 @@ services:
 
   # ── 前端静态文件 (Vue SPA) ────────────────────────────────────────────────────
   frontend:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-vue:${TP_VUE_VERSION:-v1.1.13.6}
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/thingspanel/thingspanel-vue:${TP_VUE_VERSION:-v1.1.13.6}
     container_name: tp-frontend
     restart: unless-stopped
     networks:

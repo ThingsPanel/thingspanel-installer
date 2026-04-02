@@ -13,7 +13,7 @@
 ### Linux / macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ThingsPanel/all-in-one-assembler/main/install.sh | sh
+curl -fsSL https://install.thingspanel.io/install.sh | sh
 ```
 
 安装完成后访问：**http://localhost:8080**

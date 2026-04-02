@@ -41,7 +41,7 @@ $ErrorActionPreference = "Stop"
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 $REPO    = "ThingsPanel/all-in-one-assembler"
-$RAW_BASE = "https://raw.githubusercontent.com/$REPO/main"
+$RAW_BASE = "https://install.thingspanel.io"
 
 if (-not $DataDir) { $DataDir = Join-Path $InstallDir "data" }
 

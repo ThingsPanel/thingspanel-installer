@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # ThingsPanel All-in-One — docker-compose.yml
 #
-# 快速启动: curl -fsSL https://raw.githubusercontent.com/ThingsPanel/all-in-one-assembler/main/install.sh | sh
+# 快速启动: curl -fsSL https://install.thingspanel.io/install.sh | sh
 # 变量说明: 参考 .env.example
 # ─────────────────────────────────────────────────────────────────────────────
 

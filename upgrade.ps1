@@ -14,7 +14,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $REPO     = "ThingsPanel/all-in-one-assembler"
-$RAW_BASE = "https://raw.githubusercontent.com/$REPO/main"
+$RAW_BASE = "https://install.thingspanel.io"
 
 function Write-Info    ($m) { Write-Host "[INFO]  $m" -ForegroundColor Cyan }
 function Write-Success ($m) { Write-Host "[OK]    $m" -ForegroundColor Green }

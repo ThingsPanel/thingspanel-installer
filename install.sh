@@ -3,7 +3,7 @@
 # ThingsPanel All-in-One — Linux / macOS 安装脚本
 #
 # 用法（推荐）:
-#   curl -fsSL https://raw.githubusercontent.com/ThingsPanel/all-in-one-assembler/main/install.sh | sh
+#   curl -fsSL https://install.thingspanel.io/install.sh | sh
 #
 # 本地运行:
 #   chmod +x install.sh && ./install.sh
@@ -19,7 +19,7 @@ set -euo pipefail
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 REPO="ThingsPanel/all-in-one-assembler"
-RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
+RAW_BASE="https://install.thingspanel.io"
 INSTALL_DIR="${INSTALL_DIR:-/opt/thingspanel}"
 DATA_DIR="${DATA_DIR:-${INSTALL_DIR}/data}"
 HTTP_PORT="${HTTP_PORT:-8080}"

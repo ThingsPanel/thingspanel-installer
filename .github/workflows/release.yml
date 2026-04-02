@@ -86,7 +86,8 @@ jobs:
 
   # ── 构建 Windows 安装包 ─────────────────────────────────────────────────────
   # ── 镜像推送到 GHCR (可选) ──────────────────────────────────────────────────
-  sync-ghcr:
+  # ── 镜像推送到 GHCR (可选) 以及打包离线镜像 ──────────────────────────────────
+  sync-ghcr-and-package:
     runs-on: ubuntu-latest
     needs: prepare
     permissions:
@@ -94,49 +95,66 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+
       - name: Create .env
         run: |
-          touch .env
-          echo "TP_VERSION=${{ needs.prepare.outputs.version }}" >> .env
-          echo "TP_VUE_VERSION=${{ needs.prepare.outputs.version }}" >> .env
-          echo "TP_BACKEND_VERSION=${{ needs.prepare.outputs.version }}" >> .env
-          echo "TP_GMQTT_VERSION=v1.1.6" >> .env
-          echo "TP_REDIS_VERSION=6.2.7" >> .env
-          echo "TP_MODBUS_VERSION=v1.0.6.1" >> .env
-          echo "TP_HTTP_ADAPTER_VERSION=v1.0.0" >> .env
-          echo "TP_THINGSVIS_SERVER_VERSION=v1.0.4" >> .env
-          echo "TP_THINGSVIS_STUDIO_VERSION=v1.0.4" >> .env
-          echo "TP_TIMESCALEDB_VERSION=14" >> .env
-          echo "POSTGRES_PASSWORD=1" >> .env
-          echo "REDIS_PASSWORD=1" >> .env
-          echo "AUTH_SECRET=1" >> .env
-          echo "DATA_DIR=./data" >> .env
+          cat > .env << 'ENDEOF'
+          POSTGRES_PASSWORD=1
+          REDIS_PASSWORD=1
+          AUTH_SECRET=1
+          TP_VERSION=${{ needs.prepare.outputs.version }}
+          TP_VUE_VERSION=${{ needs.prepare.outputs.version }}
+          TP_BACKEND_VERSION=${{ needs.prepare.outputs.version }}
+          TP_GMQTT_VERSION=v1.1.6
+          TP_REDIS_VERSION=6.2.7
+          TP_MODBUS_VERSION=v1.0.6.1
+          TP_HTTP_ADAPTER_VERSION=v1.0.0
+          TP_THINGSVIS_SERVER_VERSION=v1.0.4
+          TP_THINGSVIS_STUDIO_VERSION=v1.0.4
+          TP_TIMESCALEDB_VERSION=14
+          DATA_DIR=./data
+          DOCKER_REGISTRY=registry.cn-hangzhou.aliyuncs.com
+          ENDEOF
+
       - name: Use Aliyun to list images
         run: |
-          echo "DOCKER_REGISTRY=registry.cn-hangzhou.aliyuncs.com" >> .env
           docker compose config --images > images.txt
+          cat images.txt
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-      - name: Pull and Push
+
+      - name: Pull and Push to GHCR
         run: |
           while read img; do
             docker pull "$img"
             if [[ "$img" == *"registry.cn-hangzhou.aliyuncs.com"* ]]; then
               ghcr_img=$(echo "$img" | sed 's/registry.cn-hangzhou.aliyuncs.com/ghcr.io/g')
               docker tag "$img" "$ghcr_img"
-              docker push "$ghcr_img"
+              docker push "$ghcr_img" || echo "Failed to push $ghcr_img but continuing..."
             else
               echo "Skip pushing $img to GHCR (not an Aliyun registry image)"
             fi
           done < images.txt
 
+      - name: Package Offline Images
+        run: |
+          docker save $(cat images.txt) -o images.tar
+
+      - name: Upload images.tar artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-images-tar
+          path: images.tar
+          retention-days: 1
+
   build-windows:
     runs-on: windows-latest
-    needs: [prepare, validate, sync-ghcr]
+    needs: [prepare, validate, sync-ghcr-and-package]
     steps:
       - uses: actions/checkout@v4
 
@@ -146,30 +164,19 @@ jobs:
       - name: Create placeholder icon (if not exists)
         shell: pwsh
         run: |
-          $iconDir = "packaging\windows\assets"
-          if (-not (Test-Path "$iconDir\thingspanel.ico")) {
-            # 使用系统图标作为占位符（CI 环境）
-            Copy-Item "$env:SystemRoot\System32\shell32.dll" "$iconDir\thingspanel.ico" -ErrorAction SilentlyContinue || true
+          $iconDir = "packaging\windowsssets"
+          if (-not (Test-Path "$iconDir	hingspanel.ico")) {
+            Copy-Item "$env:SystemRoot\System32\shell32.dll" "$iconDir	hingspanel.ico" -ErrorAction SilentlyContinue || true
           }
           if (-not (Test-Path "$iconDir\sidebar.bmp")) {
-            # 创建最小占位 BMP
             [System.IO.File]::WriteAllBytes("$iconDir\sidebar.bmp", [byte[]]@(66,77,58,0,0,0,0,0,0,0,54,0,0,0,40,0,0,0,1,0,0,0,1,0,0,0,1,0,24,0,0,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,96,0))
           }
 
-      - name: Download Docker images for offline bundle
-        env:
-          TP_VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          echo "POSTGRES_PASSWORD=1" > .env
-          echo "REDIS_PASSWORD=1" >> .env
-          echo "AUTH_SECRET=1" >> .env
-          echo "TP_VERSION=$TP_VERSION" >> .env
-          echo "TP_VUE_VERSION=$TP_VERSION" >> .env
-          echo "TP_BACKEND_VERSION=$TP_VERSION" >> .env
-          echo "DOCKER_REGISTRY=registry.cn-hangzhou.aliyuncs.com" >> .env
-          docker compose pull
-          docker save $(docker compose config --images) -o images.tar
-        shell: bash
+      - name: Download images.tar artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images-tar
+          path: .
 
       - name: Build Windows installer
         shell: cmd
@@ -186,10 +193,9 @@ jobs:
           path: dist/windows/ThingsPanel-Setup-*.exe
           retention-days: 7
 
-  # ── 构建 macOS 安装包 ───────────────────────────────────────────────────────
   build-macos:
     runs-on: macos-latest
-    needs: [prepare, validate, sync-ghcr]
+    needs: [prepare, validate, sync-ghcr-and-package]
     steps:
       - uses: actions/checkout@v4
 
@@ -200,7 +206,6 @@ jobs:
           [ -f packaging/macos/resources/readme.html ]     || echo "<html><body><h2>说明</h2><p>ThingsPanel 是一个开...</p></body></html>" > packaging/macos/resources/readme.html
           [ -f packaging/macos/resources/license.html ]    || echo "<html><body><h2>许可证</h2><p>Apache 2.0</p></body></html>" > packaging/macos/resources/license.html
           [ -f packaging/macos/resources/conclusion.html ] || echo "<html><body><h2>安装完成</h2><p>访问 http://localhost:8080</p></body></html>" > packaging/macos/resources/conclusion.html
-          # 生成一个 1x1 透明 PNG 占位，防止 productbuild 报错
           [ -f packaging/macos/resources/background.png ]  || echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=" | base64 -d > packaging/macos/resources/background.png
 
       - name: Make scripts executable
@@ -209,19 +214,11 @@ jobs:
           chmod +x packaging/macos/scripts/preinstall
           chmod +x packaging/macos/scripts/postinstall
 
-      - name: Download Docker images for offline bundle
-        env:
-          TP_VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          echo "POSTGRES_PASSWORD=1" > .env
-          echo "REDIS_PASSWORD=1" >> .env
-          echo "AUTH_SECRET=1" >> .env
-          echo "TP_VERSION=$TP_VERSION" >> .env
-          echo "TP_VUE_VERSION=$TP_VERSION" >> .env
-          echo "TP_BACKEND_VERSION=$TP_VERSION" >> .env
-          echo "DOCKER_REGISTRY=registry.cn-hangzhou.aliyuncs.com" >> .env
-          docker compose pull
-          docker save $(docker compose config --images) -o images.tar
+      - name: Download images.tar artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images-tar
+          path: .
 
       - name: Build macOS installer
         env:
@@ -235,7 +232,6 @@ jobs:
           path: dist/macos/ThingsPanel-*.pkg
           retention-days: 7
 
-  # ── 发布 GitHub Release ─────────────────────────────────────────────────────
   release:
     runs-on: ubuntu-latest
     needs: [prepare, build-windows, build-macos]

@@ -25,7 +25,6 @@ Desktop.ini
 packaging/macos/.build/
 *.bak
 *.bak.*
-packaging/macos/resources/background.png
 
 # IDE
 .vscode/settings.json

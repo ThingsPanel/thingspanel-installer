@@ -165,8 +165,8 @@ jobs:
         shell: pwsh
         run: |
           $iconDir = "packaging\windows\assets"
-          if (-not (Test-Path "$iconDir	hingspanel.ico")) {
-            Copy-Item "$env:SystemRoot\System32\shell32.dll" "$iconDir	hingspanel.ico" -ErrorAction SilentlyContinue || true
+          if (-not (Test-Path "$iconDir\thingspanel.ico")) {
+            Copy-Item "$env:SystemRoot\System32\shell32.dll" "$iconDir\thingspanel.ico" -ErrorAction SilentlyContinue || $true
           }
           if (-not (Test-Path "$iconDir\sidebar.bmp")) {
             [System.IO.File]::WriteAllBytes("$iconDir\sidebar.bmp", [byte[]]@(66,77,58,0,0,0,0,0,0,0,54,0,0,0,40,0,0,0,1,0,0,0,1,0,0,0,1,0,24,0,0,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,96,0))
@@ -252,11 +252,17 @@ jobs:
           name: macos-installer
           path: dist/macos
 
+      - name: Download offline images.tar
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images-tar
+          path: dist
+
       - name: Generate SHA256 checksums
         run: |
           cd dist
           touch SHA256SUMS.txt
-          find . -type f \( -name "*.exe" -o -name "*.pkg" \) | sort | while read f; do
+          find . -type f \( -name "*.exe" -o -name "*.pkg" -o -name "images.tar" \) | sort | while read f; do
             sha256sum "$f" >> SHA256SUMS.txt
           done
           cat SHA256SUMS.txt
@@ -291,10 +297,12 @@ jobs:
             |------|------|------|
             | `ThingsPanel-Setup-*.exe` | Windows | Inno Setup 安装向导 |
             | `ThingsPanel-*.pkg` | macOS | macOS 安装包 |
+            | `images.tar` | Windows/Linux/macOS | 离线 Docker 镜像包（可选，放到安装目录后会自动 `docker load`） |
             | `install.sh` | Linux/macOS | 一行命令安装脚本 |
           draft: false
           prerelease: ${{ contains(needs.prepare.outputs.version, 'rc') || contains(needs.prepare.outputs.version, 'beta') }}
           files: |
             dist/windows/*.exe
             dist/macos/*.pkg
+            dist/images.tar
             dist/SHA256SUMS.txt

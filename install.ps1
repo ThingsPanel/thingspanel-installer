@@ -267,9 +267,25 @@ function Start-TpServices {
     Write-Step "启动 ThingsPanel 服务"
     Set-Location $InstallDir
 
-    Write-Info "拉取镜像（首次可能需要 3-5 分钟）..."
-    docker compose pull --quiet
-    if ($LASTEXITCODE -ne 0) { Write-Err "镜像拉取失败" }
+    $imagesTar = Join-Path $InstallDir "images.tar"
+    $loadedOffline = $false
+
+    if (Test-Path $imagesTar) {
+        Write-Info "发现本地离线镜像 images.tar，正在加载（这可能需要几分钟）..."
+        docker load -i $imagesTar
+        if ($LASTEXITCODE -eq 0) {
+            $loadedOffline = $true
+            Write-Success "离线镜像已加载"
+        } else {
+            Write-Warn "镜像加载失败，将尝试在线拉取"
+        }
+    }
+
+    if (-not $loadedOffline) {
+        Write-Info "拉取镜像（首次可能需要 3-5 分钟）..."
+        docker compose pull --quiet
+        if ($LASTEXITCODE -ne 0) { Write-Err "镜像拉取失败" }
+    }
 
     Write-Info "启动服务，等待健康检查通过..."
     docker compose up -d --wait --timeout 180

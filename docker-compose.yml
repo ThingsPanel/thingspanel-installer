@@ -69,7 +69,8 @@ services:
       GMQTT_DB_PSQL_PSQLUSER: postgres
       GMQTT_DB_PSQL_PSQLPASS: ${POSTGRES_PASSWORD}
     volumes:
-      - ${DATA_DIR:-./data}/gmqtt:/gmqttd
+      # 注意：不要挂载到 /gmqttd（会覆盖镜像内的 ./gmqttd 可执行文件）
+      - ${DATA_DIR:-./data}/gmqtt:/gmqttd/data
     networks:
       - tp-net
 

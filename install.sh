@@ -8,18 +8,29 @@
 set -eu
 
 RAW_BASE=${RAW_BASE:-https://install.thingspanel.io}
-REAL_SCRIPT_URL="$RAW_BASE/install.bash"
 
-if command -v bash >/dev/null 2>&1; then
+# Primary: install.thingspanel.io (typically best for China via CDN)
+# Fallback: GitHub raw (useful if custom domain is temporarily unreachable)
+URL1="$RAW_BASE/install.bash"
+URL2="https://raw.githubusercontent.com/ThingsPanel/thingspanel-installer/main/install.bash"
+
+fetch_and_exec() {
+  url="$1"
   if command -v curl >/dev/null 2>&1; then
-    exec curl -fsSL "$REAL_SCRIPT_URL" | bash
+    curl -fsSL "$url" | bash
+    return $?
   elif command -v wget >/dev/null 2>&1; then
-    exec wget -qO- "$REAL_SCRIPT_URL" | bash
+    wget -qO- "$url" | bash
+    return $?
   else
     echo "[ERROR] curl or wget is required to download installer." >&2
-    exit 1
+    return 1
   fi
-else
+}
+
+if ! command -v bash >/dev/null 2>&1; then
   echo "[ERROR] bash is required. Please install bash and re-run." >&2
   exit 1
 fi
+
+fetch_and_exec "$URL1" || fetch_and_exec "$URL2"

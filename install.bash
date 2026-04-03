@@ -103,22 +103,32 @@ check_docker() {
 
 check_mirror() {
     step "选择镜像源"
-    local aliyun_url="https://registry.cn-hangzhou.aliyuncs.com"
-    local ghcr_url="https://ghcr.io"
-    
-    # Check GitHub Container Registry connection
-    local ghcr_time=999
-    local aliyun_time=999
-    
+
+    # Prefer a registry that is reachable and fast *without* requiring any user parameters.
+    # Use /v2/ endpoints (they typically respond quickly with 200/401 if reachable).
+    local aliyun_url="https://registry.cn-hangzhou.aliyuncs.com/v2/"
+    local ghcr_url="https://ghcr.io/v2/"
+
+    local ghcr_time="999"
+    local aliyun_time="999"
+
+    normalize_time() {
+        case "${1:-}" in
+            ""|*[!0-9.]* ) echo "999" ;;
+            * ) echo "$1" ;;
+        esac
+    }
+
     if command_exists curl; then
-        aliyun_time=$(curl -o /dev/null -s -w "%{time_total}
-" -m 3 $aliyun_url || echo 999)
-        ghcr_time=$(curl -o /dev/null -s -w "%{time_total}
-" -m 3 $ghcr_url || echo 999)
+        aliyun_time=$(curl -o /dev/null -s -w "%{time_total}" -m 2 "$aliyun_url" || echo "999")
+        ghcr_time=$(curl -o /dev/null -s -w "%{time_total}" -m 2 "$ghcr_url" || echo "999")
     fi
-    
-    # 简单的网速比较 (如果 aliyun_time < ghcr_time，或者GHCR超时，就选阿里云)
-    if [ "$(echo "$aliyun_time < $ghcr_time" | bc -l 2>/dev/null || echo 1)" = "1" ]; then
+
+    aliyun_time=$(normalize_time "$aliyun_time")
+    ghcr_time=$(normalize_time "$ghcr_time")
+
+    # If Aliyun is faster, OR GHCR seems unreachable/slow, use Aliyun.
+    if awk -v a="$aliyun_time" -v b="$ghcr_time" 'BEGIN{exit !(a < b)}'; then
         DOCKER_REGISTRY="registry.cn-hangzhou.aliyuncs.com"
         info "使用阿里云镜像源 (延迟: ${aliyun_time}s)"
     else

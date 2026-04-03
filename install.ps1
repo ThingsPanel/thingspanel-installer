@@ -140,8 +140,8 @@ function Test-Registry {
 function Test-Registry {
     Write-Step "选择镜像源"
     try {
-        $aliyun_start = Get-Date; Invoke-WebRequest "https://registry.cn-hangzhou.aliyuncs.com" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue >$null; $aliyun = ((Get-Date) - $aliyun_start).TotalMilliseconds
-        $ghcr_start = Get-Date; Invoke-WebRequest "https://ghcr.io" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue >$null; $ghcr = ((Get-Date) - $ghcr_start).TotalMilliseconds
+        $aliyun_start = Get-Date; Invoke-WebRequest "https://registry.cn-hangzhou.aliyuncs.com/v2/" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue >$null; $aliyun = ((Get-Date) - $aliyun_start).TotalMilliseconds
+        $ghcr_start = Get-Date; Invoke-WebRequest "https://ghcr.io/v2/" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue >$null; $ghcr = ((Get-Date) - $ghcr_start).TotalMilliseconds
         
         if ($aliyun -lt $ghcr) {
             $script:DockerRegistry = "registry.cn-hangzhou.aliyuncs.com"

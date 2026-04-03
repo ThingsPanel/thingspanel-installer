@@ -262,6 +262,42 @@ TP_LOG_LEVEL=error
     Write-Success ".env 已生成（密码随机生成）"
 }
 
+# ── 初始化后端配置（避免空目录挂载覆盖镜像默认配置） ────────────────────────────
+function Initialize-BackendConfigs {
+    $cfgDir = Join-Path $DataDir "backend\configs"
+    $confFile = Join-Path $cfgDir "conf.yml"
+
+    if (Test-Path $confFile) {
+        Write-Success "后端配置已存在：$confFile"
+        return
+    }
+
+    Write-Step "初始化后端默认配置"
+    New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+
+    $backendImage = "$($script:DockerRegistry)/thingspanel/thingspanel-go:$($script:TpVersion)"
+    Write-Info "从镜像提取默认配置: $backendImage → $cfgDir"
+
+    $cid = (docker create $backendImage)
+    if ($LASTEXITCODE -ne 0 -or -not $cid) {
+        Write-Err "无法创建临时容器以提取默认配置（镜像可能拉取失败）：$backendImage"
+    }
+
+    docker cp "${cid}:/go/src/app/configs/." "$cfgDir"
+    if ($LASTEXITCODE -ne 0) {
+        docker rm $cid *> $null 2>&1
+        Write-Err "提取默认配置失败：docker cp ${cid}:/go/src/app/configs/. $cfgDir"
+    }
+
+    docker rm $cid *> $null 2>&1
+
+    if (-not (Test-Path $confFile)) {
+        Write-Err "初始化后未发现 conf.yml（期望：$confFile），请检查镜像内路径是否变化"
+    }
+
+    Write-Success "后端默认配置已初始化"
+}
+
 # ── 启动服务 ──────────────────────────────────────────────────────────────────
 function Start-TpServices {
     Write-Step "启动 ThingsPanel 服务"
@@ -286,6 +322,8 @@ function Start-TpServices {
         docker compose pull --quiet
         if ($LASTEXITCODE -ne 0) { Write-Err "镜像拉取失败" }
     }
+
+    Initialize-BackendConfigs
 
     Write-Info "启动服务，等待健康检查通过..."
     docker compose up -d --wait --timeout 180

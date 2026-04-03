@@ -173,7 +173,9 @@ resolve_version() {
     else
         # 从 GitHub API 获取最新版本
         if command_exists curl; then
-            VERSION=$(curl -fsSL                 "https://api.github.com/repos/${REPO}/releases/latest"                 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*//' || true)
+            VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+                | grep '"tag_name"' | head -1 \
+                | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/' || true)
         fi
         VERSION="${VERSION:-v1.1.13.6}"
         if [ -z "$VERSION" ]; then
@@ -261,6 +263,39 @@ EOF
     success ".env 已生成（权限 600，密码随机生成）"
 }
 
+# ── 初始化后端配置（避免空目录挂载覆盖镜像默认配置） ────────────────────────────
+init_backend_configs() {
+    local cfg_dir="${DATA_DIR}/backend/configs"
+    local conf_file="${cfg_dir}/conf.yml"
+
+    if [ -f "$conf_file" ]; then
+        success "后端配置已存在：${conf_file}"
+        return
+    fi
+
+    step "初始化后端默认配置"
+    mkdir -p "$cfg_dir"
+
+    local backend_image="${DOCKER_REGISTRY}/thingspanel/thingspanel-go:${VERSION}"
+    info "从镜像提取默认配置: ${backend_image} → ${cfg_dir}"
+
+    local cid
+    cid=$(docker create "$backend_image" 2>/dev/null) || error "无法创建临时容器以提取默认配置（镜像可能拉取失败）：${backend_image}"
+
+    if ! docker cp "${cid}:/go/src/app/configs/." "$cfg_dir" >/dev/null 2>&1; then
+        docker rm "$cid" >/dev/null 2>&1 || true
+        error "提取默认配置失败：docker cp ${cid}:/go/src/app/configs/. ${cfg_dir}"
+    fi
+
+    docker rm "$cid" >/dev/null 2>&1 || true
+
+    if [ ! -f "$conf_file" ]; then
+        error "初始化后未发现 conf.yml（期望：${conf_file}），请检查镜像内路径是否变化"
+    fi
+
+    success "后端默认配置已初始化"
+}
+
 # ── 启动服务 ──────────────────────────────────────────────────────────────────
 start_services() {
     step "启动 ThingsPanel 服务"
@@ -280,6 +315,8 @@ start_services() {
         info "拉取镜像（首次可能需要 3-5 分钟，取决于网速）..."
         docker compose pull --quiet
     fi
+
+    init_backend_configs
 
     # 启动并等待所有 healthcheck 通过
     info "启动服务，等待健康检查通过..."

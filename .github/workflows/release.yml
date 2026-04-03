@@ -80,6 +80,7 @@ jobs:
 
       - name: Check script syntax (bash)
         run: |
+          bash -n install.bash
           bash -n install.sh
           bash -n upgrade.sh
           bash -n uninstall.sh

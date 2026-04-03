@@ -30,3 +30,7 @@ packaging/macos/.build/
 .vscode/settings.json
 .idea/
 *.swp
+
+# 临时补丁脚本（本地开发工具，不提交）
+patch_*.py
+rewrite_*.py

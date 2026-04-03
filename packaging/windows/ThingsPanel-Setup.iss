@@ -73,6 +73,8 @@ Source: "..\..\nginx\nginx.conf";    DestDir: "{app}\nginx";     Flags: ignoreve
 Source: "assets\thingspanel.ico";    DestDir: "{app}";           Flags: ignoreversion
 ; 启动脚本（批处理包装）
 Source: "assets\ThingsPanel.bat";    DestDir: "{app}";           Flags: ignoreversion
+; 镜像文件（可选，如果不存在则跳过）
+Source: "..\..\images.tar";          DestDir: "{app}";           Flags: ignoreversion external skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\ThingsPanel 控制台";    Filename: "{app}\ThingsPanel.bat"; IconFilename: "{app}\thingspanel.ico"
@@ -130,4 +132,3 @@ begin
     end;
   end;
 end;
-Source: "..\..\images.tar"; DestDir: "{app}"; Flags: ignoreversion

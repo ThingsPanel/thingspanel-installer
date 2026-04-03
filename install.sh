@@ -270,6 +270,11 @@ start_services() {
         info "发现本地离线镜像 images.tar，正在加载（这可能需要几分钟）..."
         docker load -i "$INSTALL_DIR/images.tar" || warn "镜像加载失败，将尝试在线拉取"
         success "离线镜像已加载"
+    elif ls "$INSTALL_DIR"/images.tar.part-* >/dev/null 2>&1; then
+        info "发现本地离线镜像分片 images.tar.part-*，正在加载（这可能需要几分钟）..."
+        # 直接流式加载，避免拼接生成超大临时文件
+        cat "$INSTALL_DIR"/images.tar.part-* | docker load || warn "镜像加载失败，将尝试在线拉取"
+        success "离线镜像分片已加载"
     else
         # 拉取最新镜像
         info "拉取镜像（首次可能需要 3-5 分钟，取决于网速）..."

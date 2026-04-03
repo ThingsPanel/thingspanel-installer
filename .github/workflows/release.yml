@@ -141,15 +141,31 @@ jobs:
             fi
           done < images.txt
 
-      - name: Package Offline Images
+      - name: Report image sizes (audit)
         run: |
-          docker save $(cat images.txt) -o images.tar
+          set -euo pipefail
+          echo "Image sizes (bytes)"
+          while read img; do
+            size=$(docker image inspect "$img" --format '{{.Size}}' 2>/dev/null || echo 0)
+            printf "%s\t%s\n" "$size" "$img"
+          done < images.txt | sort -nr | head -50 | awk '{printf "%10.2f GB\t%s\n", $1/1024/1024/1024, $2}'
 
-      - name: Upload images.tar artifact
+      - name: Package Offline Images (split for GitHub Release limit)
+        run: |
+          set -euo pipefail
+          docker save $(cat images.txt) -o images.tar
+          # GitHub Release 单个附件上限 2GB，拆分为分片上传
+          split -b 1900m -d -a 3 images.tar images.tar.part-
+          rm -f images.tar
+          ls -lh images.tar.part-* | cat
+
+      - name: Upload offline images parts artifact
         uses: actions/upload-artifact@v4
         with:
-          name: docker-images-tar
-          path: images.tar
+          name: docker-images-parts
+          path: |
+            images.tar.part-*
+            images.txt
           retention-days: 1
 
   build-windows:
@@ -171,12 +187,6 @@ jobs:
           if (-not (Test-Path "$iconDir\sidebar.bmp")) {
             [System.IO.File]::WriteAllBytes("$iconDir\sidebar.bmp", [byte[]]@(66,77,58,0,0,0,0,0,0,0,54,0,0,0,40,0,0,0,1,0,0,0,1,0,0,0,1,0,24,0,0,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,96,0))
           }
-
-      - name: Download images.tar artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-images-tar
-          path: .
 
       - name: Build Windows installer
         shell: cmd
@@ -214,12 +224,6 @@ jobs:
           chmod +x packaging/macos/scripts/preinstall
           chmod +x packaging/macos/scripts/postinstall
 
-      - name: Download images.tar artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-images-tar
-          path: .
-
       - name: Build macOS installer
         env:
           TP_VERSION: ${{ needs.prepare.outputs.version }}
@@ -252,17 +256,17 @@ jobs:
           name: macos-installer
           path: dist/macos
 
-      - name: Download offline images.tar
+      - name: Download offline images parts
         uses: actions/download-artifact@v4
         with:
-          name: docker-images-tar
+          name: docker-images-parts
           path: dist
 
       - name: Generate SHA256 checksums
         run: |
           cd dist
           touch SHA256SUMS.txt
-          find . -type f \( -name "*.exe" -o -name "*.pkg" -o -name "images.tar" \) | sort | while read f; do
+          find . -type f \( -name "*.exe" -o -name "*.pkg" -o -name "images.tar.part-*" \) | sort | while read f; do
             sha256sum "$f" >> SHA256SUMS.txt
           done
           cat SHA256SUMS.txt
@@ -297,12 +301,12 @@ jobs:
             |------|------|------|
             | `ThingsPanel-Setup-*.exe` | Windows | Inno Setup 安装向导 |
             | `ThingsPanel-*.pkg` | macOS | macOS 安装包 |
-            | `images.tar` | Windows/Linux/macOS | 离线 Docker 镜像包（可选，放到安装目录后会自动 `docker load`） |
+            | `images.tar.part-*` | Windows/Linux/macOS | 离线 Docker 镜像分片（可选，放到安装目录后会自动加载） |
             | `install.sh` | Linux/macOS | 一行命令安装脚本 |
           draft: false
           prerelease: ${{ contains(needs.prepare.outputs.version, 'rc') || contains(needs.prepare.outputs.version, 'beta') }}
           files: |
             dist/windows/*.exe
             dist/macos/*.pkg
-            dist/images.tar
+            dist/images.tar.part-*
             dist/SHA256SUMS.txt

@@ -169,10 +169,10 @@ services:
       - thingspanel_network
     healthcheck:
       test: ["CMD", "wget", "-qO-", "--spider", "http://localhost:8000/"]
-      interval: 15s
+      interval: 20s
       timeout: 5s
-      retries: 10
-      start_period: 60s
+      retries: 20
+      start_period: 120s
 
   thingsvis-studio:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-studio:v1.0.4

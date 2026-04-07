@@ -168,7 +168,7 @@ services:
     networks:
       - thingspanel_network
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/ || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- --spider http://localhost:8000/"]
       interval: 10s
       timeout: 5s
       retries: 12

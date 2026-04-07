@@ -1,13 +1,13 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    ThingsPanel All-in-One — Windows 卸载脚本
+    ThingsPanel All-in-One — Windows Uninstall Script
 
 .DESCRIPTION
-    停止容器、移除镜像，保留数据目录（可用 -Purge 同时删除数据）。
+    Stop containers and remove images. Data is kept unless -Purge is used.
 
 .PARAMETER Purge
-    同时删除所有数据（不可恢复）
+    Also delete all data (irreversible)
 
 .EXAMPLE
     .\uninstall.ps1
@@ -25,63 +25,56 @@ $ErrorActionPreference = "Stop"
 function Write-Info    ($m) { Write-Host "[INFO]  $m" -ForegroundColor Cyan }
 function Write-Success ($m) { Write-Host "[OK]    $m" -ForegroundColor Green }
 function Write-Warn    ($m) { Write-Host "[WARN]  $m" -ForegroundColor Yellow }
-function Write-Step    ($m) { Write-Host "`n▶ $m" -ForegroundColor White -BackgroundColor DarkBlue }
+function Write-Step    ($m) { Write-Host "`n[>>] $m" -ForegroundColor White -BackgroundColor DarkBlue }
 
 Write-Host ""
-Write-Host "  ████████╗██╗  ██╗██╗███╗   ██╗ ██████╗ ███████╗" -ForegroundColor Cyan
-Write-Host "     ██╔══╝██║  ██║██║████╗  ██║██╔════╝ ██╔════╝" -ForegroundColor Cyan
-Write-Host "     ██║   ███████║██║██╔██╗ ██║██║  ███╗███████╗" -ForegroundColor Cyan
-Write-Host "     ██║   ██╔══██║██║██║╚██╗██║██║   ██║╚════██║" -ForegroundColor Cyan
-Write-Host "     ██║   ██║  ██║██║██║ ╚████║╚██████╔╝███████║" -ForegroundColor Cyan
-Write-Host "     ╚═╝   ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "              PANEL  All-in-One  Uninstaller  (Windows)" -ForegroundColor White
+Write-Host "  ThingsPanel All-in-One Uninstaller (Windows)" -ForegroundColor White
 Write-Host ""
 
 if ($Purge) {
     Write-Host ""
-    Write-Host "警告：-Purge 将删除所有数据，此操作不可恢复！" -ForegroundColor Red
-    $confirm = Read-Host "请输入 'YES' 确认删除所有数据"
-    if ($confirm -ne "YES") { Write-Info "已取消"; exit 0 }
+    Write-Host "WARNING: -Purge will delete ALL data. This cannot be undone!" -ForegroundColor Red
+    $confirm = Read-Host "Type 'YES' to confirm deletion"
+    if ($confirm -ne "YES") { Write-Info "Cancelled."; exit 0 }
 } else {
-    $confirm = Read-Host "`n确认卸载 ThingsPanel？(y/N)"
-    if ($confirm -notmatch '^[yY]$') { Write-Info "已取消"; exit 0 }
+    $confirm = Read-Host "`nUninstall ThingsPanel? (y/N)"
+    if ($confirm -notmatch '^[yY]$') { Write-Info "Cancelled."; exit 0 }
 }
 
 if (-not (Get-Command "docker" -ErrorAction SilentlyContinue)) {
-    Write-Warn "Docker 未运行，尝试直接删除目录..."
+    Write-Warn "Docker not found. Will delete directory directly..."
 } else {
-    Write-Step "停止并移除容器"
+    Write-Step "Stopping and removing containers"
     Set-Location $InstallDir
     docker compose down --remove-orphans 2>$null
-    Write-Success "容器已停止并移除"
+    Write-Success "Containers stopped and removed"
 
-    Write-Step "移除镜像"
+    Write-Step "Removing images"
     $images = docker images --format '{{.Repository}}:{{.Tag}}' 2>$null |
         Where-Object { $_ -match 'thingspanel|thingsvis|timescaledb' }
     if ($images) {
         $images | ForEach-Object { docker rmi --force $_ 2>$null }
-        Write-Success "镜像已移除"
+        Write-Success "Images removed"
     } else {
-        Write-Info "未找到 ThingsPanel 相关镜像"
+        Write-Info "No ThingsPanel images found"
     }
 }
 
 if ($Purge) {
-    Write-Step "删除安装目录"
+    Write-Step "Deleting install directory"
     Set-Location $env:USERPROFILE
     if (Test-Path $InstallDir) {
         Remove-Item $InstallDir -Recurse -Force
-        Write-Success "安装目录已删除: $InstallDir"
+        Write-Success "Deleted: $InstallDir"
     }
-    Write-Success "所有数据已清除"
+    Write-Success "All data cleared"
 } else {
-    Write-Warn "数据目录已保留。如需完全清除请运行: .\uninstall.ps1 -Purge"
+    Write-Warn "Data directory preserved. To remove all data: .\uninstall.ps1 -Purge"
 }
 
 $shortcut = "$env:USERPROFILE\Desktop\ThingsPanel.url"
 if (Test-Path $shortcut) { Remove-Item $shortcut -ErrorAction SilentlyContinue }
 
 Write-Host ""
-Write-Host "  ThingsPanel 已卸载" -ForegroundColor Green
+Write-Host "  ThingsPanel has been uninstalled." -ForegroundColor Green
 Write-Host ""

@@ -167,6 +167,12 @@ services:
         condition: service_healthy
     networks:
       - thingspanel_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "--spider", "http://localhost:8000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   thingsvis-studio:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-studio:v1.0.4
@@ -179,9 +185,16 @@ services:
       - SERVER_HOST=thingsvis-server
       - SERVER_PORT=8000
     depends_on:
-      - thingsvis-server
+      thingsvis-server:
+        condition: service_healthy
     networks:
       - thingspanel_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "--spider", "http://localhost:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 volumes:
   go_files:

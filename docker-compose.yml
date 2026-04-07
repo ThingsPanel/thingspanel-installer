@@ -169,10 +169,10 @@ services:
       - thingspanel_network
     healthcheck:
       test: ["CMD", "wget", "-qO-", "--spider", "http://localhost:8000/"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
-      retries: 3
-      start_period: 30s
+      retries: 10
+      start_period: 60s
 
   thingsvis-studio:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-studio:v1.0.4
@@ -191,10 +191,10 @@ services:
       - thingspanel_network
     healthcheck:
       test: ["CMD", "wget", "-qO-", "--spider", "http://localhost:3000/"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
-      retries: 3
-      start_period: 30s
+      retries: 10
+      start_period: 60s
 
 volumes:
   go_files:

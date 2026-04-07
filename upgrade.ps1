@@ -69,7 +69,6 @@ Write-Step "更新配置文件"
 $client = New-Object System.Net.WebClient
 $client.Headers.Add("User-Agent", "ThingsPanel-Upgrader")
 $client.DownloadFile("$RAW_BASE/docker-compose.yml", "$InstallDir\docker-compose.yml")
-$client.DownloadFile("$RAW_BASE/nginx/nginx.conf", "$InstallDir\nginx\nginx.conf")
 Write-Success "配置文件已更新"
 
 # 重启服务

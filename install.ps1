@@ -121,25 +121,6 @@ function Test-Ports {
 function Test-Registry {
     Write-Step "选择镜像源"
     try {
-        $aliyun = Measure-Command { Invoke-WebRequest "https://registry.cn-hangzhou.aliyuncs.com" -TimeoutSec 3 -ErrorAction SilentlyContinue }
-        $ghcr = Measure-Command { Invoke-WebRequest "https://ghcr.io" -TimeoutSec 3 -ErrorAction SilentlyContinue }
-        
-        if ($aliyun.TotalMilliseconds -lt $ghcr.TotalMilliseconds) {
-            $script:DockerRegistry = "registry.cn-hangzhou.aliyuncs.com"
-            Write-Info "使用 阿里云 镜像源 (延迟: $($aliyun.TotalMilliseconds) ms)"
-        } else {
-            $script:DockerRegistry = "ghcr.io"
-            Write-Info "使用 GHCR 镜像源 (延迟: $($ghcr.TotalMilliseconds) ms)"
-        }
-    } catch {
-        $script:DockerRegistry = "registry.cn-hangzhou.aliyuncs.com"
-        Write-Info "测试请求超时，默认使用 阿里云 镜像源"
-    }
-}
-
-function Test-Registry {
-    Write-Step "选择镜像源"
-    try {
         $aliyun_start = Get-Date; Invoke-WebRequest "https://registry.cn-hangzhou.aliyuncs.com/v2/" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue >$null; $aliyun = ((Get-Date) - $aliyun_start).TotalMilliseconds
         $ghcr_start = Get-Date; Invoke-WebRequest "https://ghcr.io/v2/" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue >$null; $ghcr = ((Get-Date) - $ghcr_start).TotalMilliseconds
         
@@ -187,8 +168,7 @@ function Initialize-Directories {
         "$DataDir\redis",
         "$DataDir\gmqtt",
         "$DataDir\backend\files",
-        "$DataDir\backend\configs",
-        "$InstallDir\nginx"
+        "$DataDir\backend\configs"
     )
     foreach ($dir in $dirs) {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -203,7 +183,6 @@ function Get-Configs {
     $client.Headers.Add("User-Agent", "ThingsPanel-Installer")
 
     $client.DownloadFile("$RAW_BASE/docker-compose.yml", "$InstallDir\docker-compose.yml")
-    $client.DownloadFile("$RAW_BASE/nginx/nginx.conf", "$InstallDir\nginx\nginx.conf")
     $client.DownloadFile("$RAW_BASE/upgrade.ps1", "$InstallDir\upgrade.ps1")
     $client.DownloadFile("$RAW_BASE/uninstall.ps1", "$InstallDir\uninstall.ps1")
 

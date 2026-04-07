@@ -44,7 +44,7 @@ curl -fsSL https://install.thingspanel.io/install.sh | sh
 
 | 服务 | 说明 | 端口 |
 |------|------|------|
-| **frontend** | ThingsPanel Vue 前端 | 内部 |
+| **frontend** | ThingsPanel Vue 前端（镜像内置 nginx） | 内部 |
 | **backend** | ThingsPanel Go 后端 API | 内部 |
 | **postgres** | TimescaleDB 时序数据库 | 内部 |
 | **redis** | 缓存 | 内部 |
@@ -53,7 +53,7 @@ curl -fsSL https://install.thingspanel.io/install.sh | sh
 | **http-adapter** | HTTP 协议适配器 | 内部 |
 | **thingsvis-server** | ThingsVis 大屏服务端 | 内部 |
 | **thingsvis-studio** | ThingsVis 大屏编辑器 | 内部 |
-| **gateway** | Nginx 统一入口 | **8080** |
+| **gateway** | Nginx 统一入口（镜像内置 nginx） | **8080** |
 
 ---
 
@@ -152,20 +152,20 @@ docker compose -f /opt/thingspanel/docker-compose.yml up -d
      │
      ▼
 ┌────────────────────────────────────┐
-│           gateway (nginx)          │
-│  /         → frontend              │
-│  /api/     → backend:9999          │
-│  /mqtt     → gmqtt:1883 (WebSocket)│
+│  gateway (前端镜像内置 nginx)        │
+│  /         → 静态文件 SPA          │
+│  /api/     → backend:9999         │
+│  /mqtt     → gmqtt:1883 (WS)      │
 │  /thingsvis/ → thingsvis-server    │
+│  /main/    → thingsvis-studio     │
 └────────────────────────────────────┘
-     │              │              │
-     ▼              ▼              ▼
- frontend        backend       thingsvis
- (Vue SPA)      (Go API)       (Server)
-                    │
-            ┌───────┼───────┐
-            ▼       ▼       ▼
-         postgres  redis  gmqtt
+     │
+     ▼
+ frontend（前端镜像，同一个 nginx）
+     │
+     ▼
+ backend        thingsvis
+ (Go API)      (Server)
 ```
 
 ---

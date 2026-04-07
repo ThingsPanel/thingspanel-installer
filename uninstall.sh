@@ -49,7 +49,7 @@ docker images --format '{{.Repository}}:{{.Tag}}' \
 success "镜像已移除"
 
 if $PURGE; then
-    DATA_DIR="$(grep '^DATA_DIR=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2 || echo "${INSTALL_DIR}/data")"
+    DATA_DIR="${INSTALL_DIR}/data"
     info "删除数据目录: $DATA_DIR"
     rm -rf "$DATA_DIR"
     info "删除安装目录: $INSTALL_DIR"

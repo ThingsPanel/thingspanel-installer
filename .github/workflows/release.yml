@@ -1,4 +1,4 @@
-name: Release — Build & Publish Installers
+name: Release — Build & Publish
 
 on:
   push:
@@ -11,18 +11,10 @@ on:
         description: "版本号（如 v1.2.0）"
         required: true
         type: string
-      push_latest:
-        description: "同时更新 latest 标签"
-        required: false
-        default: true
-        type: boolean
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
-
-env:
-  REGISTRY: registry.cn-hangzhou.aliyuncs.com/thingspanel
 
 jobs:
 
@@ -53,26 +45,8 @@ jobs:
       - name: Create test .env
         run: |
           cat > .env << 'EOF'
-          POSTGRES_PASSWORD=test_pg_pass
-          REDIS_PASSWORD=test_redis_pass
-          AUTH_SECRET=test_auth_secret_minimum_32_chars_long
-          TP_VERSION=${{ needs.prepare.outputs.version }}
-          TP_VUE_VERSION=${{ needs.prepare.outputs.version }}
-          TP_BACKEND_VERSION=${{ needs.prepare.outputs.version }}
-          TP_GMQTT_VERSION=v1.1.6
-          TP_REDIS_VERSION=6.2.7
-          TP_MODBUS_VERSION=v1.0.6.1
-          TP_HTTP_ADAPTER_VERSION=v1.0.0
-          TP_THINGSVIS_SERVER_VERSION=v1.0.4
-          TP_THINGSVIS_STUDIO_VERSION=v1.0.4
-          TP_TIMESCALEDB_VERSION=14
           DATA_DIR=./data
-          HTTP_PORT=8080
-          MQTT_PORT=1883
-          MODBUS_TCP_PORT=502
-          MODBUS_RTU_PORT=503
           TZ=Asia/Shanghai
-          TP_LOG_LEVEL=error
           EOF
 
       - name: Validate docker-compose syntax
@@ -85,82 +59,41 @@ jobs:
           bash -n upgrade.sh
           bash -n uninstall.sh
 
-  # ── 构建 Windows 安装包 ─────────────────────────────────────────────────────
-  # ── 镜像推送到 GHCR (可选) ──────────────────────────────────────────────────
-  # ── 镜像推送到 GHCR (可选) 以及打包离线镜像 ──────────────────────────────────
-  sync-ghcr-and-package:
+  # ── 打包离线镜像 ─────────────────────────────────────────────────────────────
+  package-offline:
     runs-on: ubuntu-latest
     needs: prepare
-    permissions:
-      packages: write
-      contents: read
     steps:
       - uses: actions/checkout@v4
 
       - name: Create .env
         run: |
-          cat > .env << 'ENDEOF'
-          POSTGRES_PASSWORD=1
-          REDIS_PASSWORD=1
-          AUTH_SECRET=1
-          TP_VERSION=${{ needs.prepare.outputs.version }}
-          TP_VUE_VERSION=${{ needs.prepare.outputs.version }}
-          TP_BACKEND_VERSION=${{ needs.prepare.outputs.version }}
-          TP_GMQTT_VERSION=v1.1.6
-          TP_REDIS_VERSION=6.2.7
-          TP_MODBUS_VERSION=v1.0.6.1
-          TP_HTTP_ADAPTER_VERSION=v1.0.0
-          TP_THINGSVIS_SERVER_VERSION=v1.0.4
-          TP_THINGSVIS_STUDIO_VERSION=v1.0.4
-          TP_TIMESCALEDB_VERSION=14
+          cat > .env << 'EOF'
           DATA_DIR=./data
-          DOCKER_REGISTRY=registry.cn-hangzhou.aliyuncs.com
-          ENDEOF
+          TZ=Asia/Shanghai
+          EOF
 
-      - name: Use Aliyun to list images
+      - name: List images
         run: |
           docker compose config --images > images.txt
           cat images.txt
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-
-      - name: Pull and Push to GHCR
+      - name: Pull images
         run: |
           while read img; do
             docker pull "$img"
-            if [[ "$img" == *"registry.cn-hangzhou.aliyuncs.com"* ]]; then
-              ghcr_img=$(echo "$img" | sed 's/registry.cn-hangzhou.aliyuncs.com/ghcr.io/g')
-              docker tag "$img" "$ghcr_img"
-              docker push "$ghcr_img" || echo "Failed to push $ghcr_img but continuing..."
-            else
-              echo "Skip pushing $img to GHCR (not an Aliyun registry image)"
-            fi
           done < images.txt
 
-      - name: Report image sizes (audit)
-        run: |
-          set -euo pipefail
-          echo "Image sizes (bytes)"
-          while read img; do
-            size=$(docker image inspect "$img" --format '{{.Size}}' 2>/dev/null || echo 0)
-            printf "%s\t%s\n" "$size" "$img"
-          done < images.txt | sort -nr | head -50 | awk '{printf "%10.2f GB\t%s\n", $1/1024/1024/1024, $2}'
-
-      - name: Package Offline Images (split for GitHub Release limit)
+      - name: Package and split images
         run: |
           set -euo pipefail
           docker save $(cat images.txt) -o images.tar
-          # GitHub Release 单个附件上限 2GB，拆分为分片上传
+          # GitHub Release 单文件上限 2GB，拆分为 1.9GB 分片
           split -b 1900m -d -a 3 images.tar images.tar.part-
           rm -f images.tar
           ls -lh images.tar.part-* | cat
 
-      - name: Upload offline images parts artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: docker-images-parts
@@ -171,7 +104,7 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
-    needs: [prepare, validate, sync-ghcr-and-package]
+    needs: [prepare, validate, package-offline]
     steps:
       - uses: actions/checkout@v4
 
@@ -182,11 +115,12 @@ jobs:
         shell: pwsh
         run: |
           $iconDir = "packaging\windows\assets"
+          New-Item -ItemType Directory -Path $iconDir -Force | Out-Null
           if (-not (Test-Path "$iconDir\thingspanel.ico")) {
             Copy-Item "$env:SystemRoot\System32\shell32.dll" "$iconDir\thingspanel.ico" -ErrorAction SilentlyContinue || $true
           }
           if (-not (Test-Path "$iconDir\sidebar.bmp")) {
-            [System.IO.File]::WriteAllBytes("$iconDir\sidebar.bmp", [byte[]]@(66,77,58,0,0,0,0,0,0,0,54,0,0,0,40,0,0,0,1,0,0,0,1,0,0,0,1,0,24,0,0,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,96,0))
+            [System.IO.File]::WriteAllBytes("$iconDir\sidebar.bmp", [byte[]]@(66,77,58,0,0,0,0,0,0,0,54,0,0,0,40,0,0,0,1,0,0,0,1,0,0,0,1,0,24,0,0,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,96,0))
           }
 
       - name: Build Windows installer
@@ -206,7 +140,7 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
-    needs: [prepare, validate, sync-ghcr-and-package]
+    needs: [prepare, validate, package-offline]
     steps:
       - uses: actions/checkout@v4
 
@@ -284,7 +218,7 @@ jobs:
 
             **Linux / macOS（推荐）**
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/ThingsPanel/all-in-one-assembler/main/install.sh | sh
+            curl -fsSL https://install.thingspanel.io/install.sh | sh
             ```
 
             **Windows**
@@ -311,3 +245,6 @@ jobs:
             dist/macos/*.pkg
             dist/images.tar.part-*
             dist/SHA256SUMS.txt
+            install.sh
+            upgrade.sh
+            uninstall.sh

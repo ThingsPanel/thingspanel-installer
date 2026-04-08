@@ -113,7 +113,9 @@ if (Test-Path $imagesTar) {
 
 if (-not (Test-Path $imagesTar)) {
     Write-Info "Pulling images (first run may take 3-5 minutes)..."
-    docker compose pull 2>$null
+    # 用 cmd /c 包裹，彻底绕过 PowerShell 对 native command 的错误处理
+    # 进度文字全部走 cmd 的 stdout，不会触发 PowerShell 的 NativeCommandError
+    cmd /c "docker compose pull >NUL 2>&1"
 }
 
 Write-Info "Cleaning up any existing services..."

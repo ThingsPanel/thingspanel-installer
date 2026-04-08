@@ -15,15 +15,17 @@ $RAW_BASE = if ($env:RAW_BASE) { $env:RAW_BASE } else { "https://install.thingsp
 $URL1 = "$RAW_BASE/install.core.ps1"
 $URL2 = "https://raw.githubusercontent.com/ThingsPanel/thingspanel-installer/main/install.core.ps1"
 
-if (-not (Get-Command "pwsh" -ErrorAction SilentlyContinue)) {
-    Write-Host "[ERROR] pwsh (PowerShell Core) is required." -ForegroundColor Red
-    Write-Host "Please install from: https://github.com/PowerShell/PowerShell" -ForegroundColor White
-    Write-Host ""
-    Write-Host "Alternative — download the script to a file first:" -ForegroundColor White
-    Write-Host "  irm https://install.thingspanel.io/install.ps1 -OutFile install.ps1" -ForegroundColor Gray
-    Write-Host "  .\install.ps1" -ForegroundColor Gray
-    Read-Host "Press Enter to exit"
-    exit 1
+# ── 优先使用 pwsh，降级到 powershell ──────────────────────────────────────────
+$PS_EXE = if (Get-Command "pwsh" -ErrorAction SilentlyContinue) {
+    "pwsh"
+} else {
+    "powershell"
+}
+
+# ── 强制 UTF-8 编码输出，防止中文乱码 ─────────────────────────────────────────
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+if ($PS_EXE -eq "powershell") {
+    powershell -Command "chcp 65001 > `$null" 2>$null
 }
 
 $tempFile = "$env:TEMP\thingspanel_install_$PID.ps1"
@@ -50,7 +52,7 @@ try {
 
     [System.IO.File]::WriteAllText($tempFile, $scriptContent, [System.Text.Encoding]::UTF8)
 
-    Start-Process -FilePath "pwsh.exe" `
+    Start-Process -FilePath "$PS_EXE.exe" `
         -ArgumentList "-ExecutionPolicy", "Bypass", "-File", $tempFile `
         -Wait -PassThru | Out-Null
 

@@ -8,6 +8,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# ── 强制 UTF-8 输出，防止中文乱码 ─────────────────────────────────────────────
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    powershell -Command "chcp 65001 > `$null" 2>$null
+}
+
 $REPO          = "ThingsPanel/all-in-one-assembler"
 $RAW_BASE      = "https://install.thingspanel.io"
 $INSTALL_DIR   = "C:\ThingsPanel"

@@ -113,7 +113,7 @@ if (Test-Path $imagesTar) {
 
 if (-not (Test-Path $imagesTar)) {
     Write-Info "Pulling images (first run may take 3-5 minutes)..."
-    docker compose pull --quiet 2>&1 | Out-Null
+    docker compose pull 2>$null
 }
 
 Write-Info "Cleaning up any existing services..."

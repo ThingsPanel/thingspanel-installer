@@ -23,22 +23,35 @@ powershell -Command "chcp 65001 > `$null" 2>$null
 
 $tempFile = "$env:TEMP\thingspanel_install_$PID.ps1"
 
-# UTF-8 with BOM: PowerShell 5.1 & 执行时需要 BOM 才能正确识别编码
-$utf8WithBOM = New-Object System.Text.UTF8Encoding $true
+# PowerShell 5.1 中 .ps1 文件应该用 UTF-8 无 BOM 写入
+# & 执行时 PS 会自动识别 UTF-8（无 BOM），绝对不要加 BOM！
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+
+# ── 下载函数：检查 HTTP 状态码，非 200 视为失败，走 fallback ───────────────────
+function Get-ScriptContent($url) {
+    $resp = try {
+        Invoke-WebRequest -Uri $url `
+            -Headers @{ "User-Agent" = "ThingsPanel-Installer" } `
+            -TimeoutSec 30 -UseBasicParsing `
+            -ErrorAction Stop
+    } catch {
+        # 网络级错误（DNS、连接超时、证书等）
+        return $null
+    }
+    if ($resp.StatusCode -eq 200) {
+        return $resp.Content
+    }
+    # HTTP 4xx / 5xx 也走 fallback
+    return $null
+}
 
 try {
     Write-Host "[INFO]  Downloading installer from $URL1" -ForegroundColor Cyan
-    $scriptContent = Invoke-WebRequest -Uri $URL1 `
-        -Headers @{ "User-Agent" = "ThingsPanel-Installer" } `
-        -TimeoutSec 30 -UseBasicParsing `
-        | Select-Object -ExpandProperty Content
+    $scriptContent = Get-ScriptContent $URL1
 
     if ([string]::IsNullOrWhiteSpace($scriptContent)) {
-        Write-Host "[INFO]  Primary URL empty, trying GitHub fallback..." -ForegroundColor Yellow
-        $scriptContent = Invoke-WebRequest -Uri $URL2 `
-            -Headers @{ "User-Agent" = "ThingsPanel-Installer" } `
-            -TimeoutSec 30 -UseBasicParsing `
-            | Select-Object -ExpandProperty Content
+        Write-Host "[INFO]  Primary URL failed, trying GitHub fallback..." -ForegroundColor Yellow
+        $scriptContent = Get-ScriptContent $URL2
     }
 
     if ([string]::IsNullOrWhiteSpace($scriptContent)) {
@@ -47,10 +60,11 @@ try {
         exit 1
     }
 
-    [System.IO.File]::WriteAllText($tempFile, $scriptContent, $utf8WithBOM)
+    # 写入时用 UTF-8 无 BOM，这是 .ps1 文件的标准格式
+    [System.IO.File]::WriteAllText($tempFile, $scriptContent, $utf8NoBom)
 
     Write-Host "[INFO]  Running installer in current session..." -ForegroundColor Cyan
-    & $tempFile
+    powershell -ExecutionPolicy Bypass -File $tempFile
 
 } finally {
     Remove-Item $tempFile -Force -ErrorAction SilentlyContinue

@@ -1,213 +1,63 @@
-﻿#Requires -RunAsAdministrator
-<#
-.SYNOPSIS
-    ThingsPanel All-in-One — Windows Installer
+#!/usr/bin/env pwsh
+#
+# ThingsPanel All-in-One — Windows bootstrap installer
+#
+# Usage:
+#   irm https://install.thingspanel.io/install.ps1 | iex
+#
+# This wrapper downloads the real installer and executes it with -File,
+# so that [CmdletBinding()], param(), and #Requires work correctly —
+# unlike when the script body is piped through Invoke-Expression (iex).
+#
 
-.DESCRIPTION
-    Auto-detect Docker Desktop, download configs, and start ThingsPanel.
+$RAW_BASE = if ($env:RAW_BASE) { $env:RAW_BASE } else { "https://install.thingspanel.io" }
 
-.PARAMETER Version
-    Specify version (default: latest)
+$URL1 = "$RAW_BASE/install.core.ps1"
+$URL2 = "https://raw.githubusercontent.com/ThingsPanel/thingspanel-installer/main/install.core.ps1"
 
-.PARAMETER HttpPort
-    Web port (default: 8080)
+function fetch_and_exec {
+    param([string]$Url)
 
-.PARAMETER MqttPort
-    MQTT port (default: 1883)
-
-.EXAMPLE
-    .\install.ps1
-    .\install.ps1 -Version v1.2.0 -HttpPort 9090
-    powershell -ExecutionPolicy Bypass -File install.ps1
-#>
-
-[CmdletBinding()]
-param(
-    [string]$Version   = "",
-    [int]$HttpPort      = 8080,
-    [int]$MqttPort      = 1883
-)
-
-$ErrorActionPreference = "Stop"
-
-$REPO          = "ThingsPanel/all-in-one-assembler"
-$RAW_BASE      = "https://install.thingspanel.io"
-$INSTALL_DIR   = "C:\ThingsPanel"
-$MIN_DOCKER_VER = "20.10"
-
-function Write-Info    ($m) { Write-Host "[INFO]  $m" -ForegroundColor Cyan }
-function Write-Success ($m) { Write-Host "[OK]    $m" -ForegroundColor Green }
-function Write-Warn    ($m) { Write-Host "[WARN]  $m" -ForegroundColor Yellow }
-function Write-Step    ($m) { Write-Host "`n[>>] $m" -ForegroundColor White -BackgroundColor DarkBlue }
-function Write-Err     ($m) { Write-Host "[ERROR] $m" -ForegroundColor Red; throw $m }
-
-Write-Host ""
-Write-Host "  ThingsPanel All-in-One Installer (Windows)" -ForegroundColor White
-Write-Host ""
-
-function Test-Docker {
-    Write-Step "Checking Docker Desktop"
-
-    if (-not (Get-Command "docker" -ErrorAction SilentlyContinue)) {
-        Write-Err "Docker not found. Please install Docker Desktop first: https://www.docker.com/products/docker-desktop"
-    }
-
-    $out = docker version --format '{{.Server.Version}}' 2>$null
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($out)) {
-        Write-Err "Docker engine not running. Please start Docker Desktop and try again."
-    }
-    if ([Version]$out -lt [Version]$MIN_DOCKER_VER) {
-        Write-Err "Docker version too old (current: $out, need >= $MIN_DOCKER_VER)"
-    }
-    Write-Success "Docker $out"
-
-    $out = docker compose version 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Err "docker compose (v2) not found. Please upgrade Docker Desktop."
-    }
-    Write-Success "Docker Compose v2 available"
-}
-
-function Test-Ports {
-    Write-Step "Checking port availability"
-    foreach ($port in @($HttpPort, $MqttPort)) {
-        $conn = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
-        if ($conn) {
-            Write-Warn "Port ${port} is in use (PID: $($conn[0].OwningProcess))"
-        } else {
-            Write-Success "Port $port is available"
-        }
-    }
-}
-
-function Resolve-TpVersion {
-    Write-Step "Determining version"
-
-    if ($Version -ne "") {
-        $script:TpVersion = $Version
-        Write-Info "Using specified version: $Version"
-        return
-    }
-
+    Write-Host "[INFO]  Downloading installer from $Url" -ForegroundColor Cyan
     try {
-        $rel = Invoke-RestMethod `
-            -Uri "https://api.github.com/repos/$REPO/releases/latest" `
+        $scriptContent = Invoke-WebRequest -Uri $Url `
             -Headers @{ "User-Agent" = "ThingsPanel-Installer" } `
-            -TimeoutSec 10
-        $script:TpVersion = $rel.tag_name
-    } catch {
-        $script:TpVersion = "v1.1.13.6"
-        Write-Warn "Cannot fetch latest version, using default: $($script:TpVersion)"
-    }
-    Write-Success "Installing version: $($script:TpVersion)"
-}
-
-function Initialize-Directories {
-    Write-Step "Creating directory structure"
-    New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
-    Write-Success "Directory: $INSTALL_DIR"
-}
-
-function Get-Configs {
-    Write-Step "Downloading config files"
-    $client = New-Object System.Net.WebClient
-    $client.Headers.Add("User-Agent", "ThingsPanel-Installer")
-
-    $client.DownloadFile("$RAW_BASE/docker-compose.yml", "$INSTALL_DIR\docker-compose.yml")
-    $client.DownloadFile("$RAW_BASE/upgrade.ps1", "$INSTALL_DIR\upgrade.ps1")
-    $client.DownloadFile("$RAW_BASE/uninstall.ps1", "$INSTALL_DIR\uninstall.ps1")
-
-    Write-Success "Config files downloaded to $INSTALL_DIR"
-}
-
-function Start-TpServices {
-    Write-Step "Starting ThingsPanel services"
-    Set-Location $INSTALL_DIR
-
-    $imagesTar = Join-Path $INSTALL_DIR "images.tar"
-
-    if (Test-Path $imagesTar) {
-        Write-Info "Found local images.tar, loading (may take a few minutes)..."
-        docker load -i $imagesTar
-        if ($LASTEXITCODE -eq 0) {
-            Write-Success "Local images loaded"
-        } else {
-            Write-Warn "Image load failed, will try online pull"
+            -TimeoutSec 30 -UseBasicParsing `
+            | Select-Object -ExpandProperty Content
+        if ([string]::IsNullOrWhiteSpace($scriptContent)) {
+            Write-Host "[WARN]  Empty response from $Url, trying fallback..." -ForegroundColor Yellow
+            return $false
         }
-    }
 
-    if (-not (Test-Path $imagesTar) -or $LASTEXITCODE -ne 0) {
-        Write-Info "Pulling images (first run may take 3-5 minutes)..."
-        docker compose pull --quiet
-        if ($LASTEXITCODE -ne 0) { Write-Err "Image pull failed" }
-    }
+        $tempFile = [System.IO.Path]::GetTempFileName() + ".ps1"
+        [System.IO.File]::WriteAllText($tempFile, $scriptContent, [System.Text.Encoding]::UTF8)
 
-    Write-Info "Starting services, waiting for health checks..."
-    docker compose up -d --wait --timeout 180
-    if ($LASTEXITCODE -ne 0) {
-        Write-Err "Failed to start. View logs: docker compose -f `"$INSTALL_DIR\docker-compose.yml`" logs"
-    }
-    Write-Success "All services started"
-}
-
-function Test-Installation {
-    Write-Step "Verifying installation"
-    $url = "http://localhost:$HttpPort/health"
-    $maxWait = 60
-    $waited = 0
-
-    Write-Info "Waiting for web service..."
-    while ($waited -lt $maxWait) {
-        try {
-            $resp = Invoke-WebRequest -Uri $url -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
-            if ($resp.StatusCode -eq 200) {
-                Write-Success "Web service ready: http://localhost:$HttpPort"
-                return
-            }
-        } catch { }
-        Start-Sleep -Seconds 2
-        $waited += 2
-        Write-Host -NoNewline "."
-    }
-    Write-Host ""
-    Write-Warn "Web service not responding yet. Please visit http://localhost:$HttpPort shortly."
-}
-
-function New-DesktopShortcut {
-    Write-Step "Creating desktop shortcut"
-    try {
-        $wsh = New-Object -ComObject WScript.Shell
-        $shortcut = $wsh.CreateShortcut("$env:USERPROFILE\Desktop\ThingsPanel.url")
-        $shortcut.TargetPath = "http://localhost:$HttpPort"
-        $shortcut.Save()
-        Write-Success "Desktop shortcut created"
+        $process = Start-Process -FilePath "pwsh.exe" `
+            -ArgumentList "-ExecutionPolicy", "Bypass", "-File", $tempFile `
+            -Wait -NoNewWindow -PassThru
+        $exitCode = $process.ExitCode
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+        return ($exitCode -eq 0)
     } catch {
-        Write-Warn "Failed to create shortcut (non-critical)"
+        Write-Host "[WARN]  Failed to fetch from $Url : $_" -ForegroundColor Yellow
+        return $false
     }
 }
 
-Test-Docker
-Test-Ports
-Resolve-TpVersion
-Initialize-Directories
-Get-Configs
-Start-TpServices
-Test-Installation
-New-DesktopShortcut
+if (-not (Get-Command "pwsh" -ErrorAction SilentlyContinue)) {
+    Write-Host "[ERROR] pwsh (PowerShell Core) is required." -ForegroundColor Red
+    Write-Host "Please install from: https://github.com/PowerShell/PowerShell" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Alternative: download the script to a file first:" -ForegroundColor White
+    Write-Host "  irm https://install.thingspanel.io/install.ps1 -OutFile install.ps1" -ForegroundColor Gray
+    Write-Host "  .\install.ps1" -ForegroundColor Gray
+    exit 1
+}
 
-Write-Host ""
-Write-Host "========================================" -ForegroundColor Green
-Write-Host "   ThingsPanel installed successfully!" -ForegroundColor Green
-Write-Host "========================================" -ForegroundColor Green
-Write-Host ""
-Write-Host "  Web UI:   http://localhost:$HttpPort" -ForegroundColor White
-Write-Host "  MQTT:     localhost:$MqttPort" -ForegroundColor White
-Write-Host ""
-Write-Host "  Install dir: $INSTALL_DIR" -ForegroundColor Gray
-Write-Host ""
-Write-Host "Common commands:" -ForegroundColor White
-Write-Host "  Status:  docker compose -f `"$INSTALL_DIR\docker-compose.yml`" ps"
-Write-Host "  Logs:    docker compose -f `"$INSTALL_DIR\docker-compose.yml`" logs -f backend"
-Write-Host "  Stop:    docker compose -f `"$INSTALL_DIR\docker-compose.yml`" down"
-Write-Host "  Upgrade: powershell -File `"$INSTALL_DIR\upgrade.ps1`""
-Write-Host ""
+if (-not (fetch_and_exec -Url $URL1)) {
+    Write-Host "[INFO]  Primary URL failed, trying GitHub fallback..." -ForegroundColor Cyan
+    if (-not (fetch_and_exec -Url $URL2)) {
+        Write-Host "[ERROR] Both sources failed. Please check your network." -ForegroundColor Red
+        exit 1
+    }
+}

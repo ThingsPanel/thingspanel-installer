@@ -36,7 +36,7 @@ if (-not (Get-Command "docker" -ErrorAction SilentlyContinue)) {
     Write-Err "Docker not found. Please install Docker Desktop first."
 }
 
-$out = docker version --format '{{.Server.Version}}'
+$out = docker version --format '{{.Server.Version}}' 2>$null
 if ([string]::IsNullOrEmpty($out)) {
     Write-Err "Docker engine not running. Please start Docker Desktop."
 }
@@ -45,7 +45,7 @@ if ([Version]$out -lt [Version]$MIN_DOCKER_VER) {
 }
 Write-Success "Docker $out"
 
-try { docker compose version 2>/dev/null } catch {
+try { docker compose version 2>$null } catch {
     Write-Err "docker compose (v2) not found. Please upgrade Docker Desktop."
 }
 Write-Success "Docker Compose v2 available"
@@ -102,7 +102,7 @@ $imagesTar = Join-Path $INSTALL_DIR "images.tar"
 
 if (Test-Path $imagesTar) {
     Write-Info "Found local images.tar, loading (may take a few minutes)..."
-    docker load -i $imagesTar 2>&1 | Out-Null
+    docker load -i $imagesTar *>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Success "Local images loaded"
     } else {
@@ -119,20 +119,13 @@ if (-not (Test-Path $imagesTar)) {
 }
 
 Write-Info "Cleaning up any existing services..."
-docker compose down --remove-orphans 2>&1 | Out-Null
+cmd /c "docker compose down --remove-orphans >NUL 2>&1"
 
 Write-Info "Starting services, waiting for health checks..."
-$errFile = "$env:TEMP\tp_docker_err_$PID.txt"
-docker compose up -d --wait --timeout 180 2> $errFile | Out-Null
+cmd /c "docker compose up -d --wait --timeout 180 >NUL 2>&1"
 $exitCode = $LASTEXITCODE
-if ((Test-Path $errFile) -and (Get-Content $errFile -Raw) -match "error|failed") {
-    $errContent = Get-Content $errFile -Raw
-    Remove-Item $errFile -Force -ErrorAction SilentlyContinue
-    Write-Err "Docker compose failed: $errContent"
-}
-Remove-Item $errFile -Force -ErrorAction SilentlyContinue
 
-$containers = docker compose ps -q
+$containers = docker compose ps -q 2>$null
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($containers)) {
     Write-Err "Failed to start. View logs: docker compose -f `"$INSTALL_DIR\docker-compose.yml`" logs"
 }

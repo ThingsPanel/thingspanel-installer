@@ -39,7 +39,15 @@ function Invoke-ScriptDownload($url) {
 }
 
 Write-Host "[INFO]  Downloading installer from $URL1" -ForegroundColor Cyan
-$scriptContent = Invoke-ScriptDownload $URL1
+
+# 默认从 CDN 下载，THINGSPLUGIN_USE_LOCAL=1 时使用本地文件（开发/调试用）
+$localCore = Join-Path $PSScriptRoot "install.core.ps1"
+if (($env:THINGSPLUGIN_USE_LOCAL -eq "1") -and (Test-Path $localCore)) {
+    Write-Host "[INFO]  Using local install.core.ps1 (CDN skipped)" -ForegroundColor Cyan
+    $scriptContent = Get-Content $localCore -Raw -Encoding UTF8
+} else {
+    $scriptContent = Invoke-ScriptDownload $URL1
+}
 
 if ([string]::IsNullOrWhiteSpace($scriptContent)) {
     Write-Host "[INFO]  Primary URL failed, trying GitHub fallback..." -ForegroundColor Yellow

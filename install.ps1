@@ -22,6 +22,10 @@ $URL2 = "https://raw.githubusercontent.com/ThingsPanel/thingspanel-installer/mai
 powershell -Command "chcp 65001 > `$null" 2>$null
 
 $tempFile = "$env:TEMP\thingspanel_install_$PID.ps1"
+
+# UTF-8 with BOM: PowerShell 5.1 & 执行时需要 BOM 才能正确识别编码
+$utf8WithBOM = New-Object System.Text.UTF8Encoding $true
+
 try {
     Write-Host "[INFO]  Downloading installer from $URL1" -ForegroundColor Cyan
     $scriptContent = Invoke-WebRequest -Uri $URL1 `
@@ -43,7 +47,7 @@ try {
         exit 1
     }
 
-    [System.IO.File]::WriteAllText($tempFile, $scriptContent, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($tempFile, $scriptContent, $utf8WithBOM)
 
     Write-Host "[INFO]  Running installer in current session..." -ForegroundColor Cyan
     & $tempFile

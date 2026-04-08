@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   frontend:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-vue:v1.1.13.7

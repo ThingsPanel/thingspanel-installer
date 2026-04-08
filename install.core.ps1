@@ -74,7 +74,7 @@ if ($Version -ne "") {
             -TimeoutSec 10
         $script:TpVersion = $rel.tag_name
     } catch {
-        $script:TpVersion = "v1.1.13.6"
+        $script:TpVersion = "v1.1.13.7"
         Write-Warn "Cannot fetch latest version, using default: $($script:TpVersion)"
     }
 }

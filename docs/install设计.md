@@ -52,7 +52,7 @@ curl -fsSL https://install.thingspanel.io/install.sh | bash
 1. 优先使用环境变量 TP_VERSION
 2. 否则从 GitHub API 获取最新版本
    curl https://api.github.com/repos/ThingsPanel/all-in-one-assembler/releases/latest
-3. 默认版本: v1.1.13.6
+3. 默认版本: v1.1.13.7
 ```
 
 ### 步骤 3：创建目录
@@ -112,7 +112,7 @@ curl http://localhost:8080/health
 | `INSTALL_DIR` | `/opt/thingspanel` | 安装目录 |
 | `HTTP_PORT` | `8080` | Web 端口 |
 | `MQTT_PORT` | `1883` | MQTT 端口 |
-| `TP_VERSION` | `v1.1.13.6` | 安装版本 |
+| `TP_VERSION` | `v1.1.13.7` | 安装版本 |
 
 ### 使用示例
 

@@ -9,24 +9,17 @@
 # so that [CmdletBinding()], param(), and #Requires work correctly —
 # unlike when the script body is piped through Invoke-Expression (iex).
 #
+# 执行方式：在管理员 PowerShell 中直接运行即可，会在当前窗口执行，不弹新窗口。
+#
 
 $RAW_BASE = if ($env:RAW_BASE) { $env:RAW_BASE } else { "https://install.thingspanel.io" }
 
 $URL1 = "$RAW_BASE/install.core.ps1"
 $URL2 = "https://raw.githubusercontent.com/ThingsPanel/thingspanel-installer/main/install.core.ps1"
 
-# ── 优先使用 pwsh，降级到 powershell ──────────────────────────────────────────
-$PS_EXE = if (Get-Command "pwsh" -ErrorAction SilentlyContinue) {
-    "pwsh"
-} else {
-    "powershell"
-}
-
 # ── 强制 UTF-8 编码输出，防止中文乱码 ─────────────────────────────────────────
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-if ($PS_EXE -eq "powershell") {
-    powershell -Command "chcp 65001 > `$null" 2>$null
-}
+powershell -Command "chcp 65001 > `$null" 2>$null
 
 $tempFile = "$env:TEMP\thingspanel_install_$PID.ps1"
 try {
@@ -52,9 +45,8 @@ try {
 
     [System.IO.File]::WriteAllText($tempFile, $scriptContent, [System.Text.Encoding]::UTF8)
 
-    Start-Process -FilePath "$PS_EXE.exe" `
-        -ArgumentList "-ExecutionPolicy", "Bypass", "-File", $tempFile `
-        -Wait -PassThru | Out-Null
+    Write-Host "[INFO]  Running installer in current session..." -ForegroundColor Cyan
+    & $tempFile
 
 } finally {
     Remove-Item $tempFile -Force -ErrorAction SilentlyContinue

@@ -1,10 +1,6 @@
 name: Release — Build & Publish
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'                   # 正式版本：v1.2.0
-      - 'v*.*.*.*'                  # 子版本：v1.1.13.6
   workflow_dispatch:
     inputs:
       version:
@@ -27,11 +23,7 @@ jobs:
       - id: version
         name: Resolve version
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.version }}"
-          else
-            VERSION="${GITHUB_REF_NAME}"
-          fi
+          VERSION="${{ inputs.version }}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Version: ${VERSION}"
 

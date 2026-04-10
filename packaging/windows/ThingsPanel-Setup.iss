@@ -30,13 +30,9 @@ SolidCompression=yes
 MinVersion=10.0.17763
 
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [CustomMessages]
-chinesesimplified.DockerNotFound=Docker Desktop not found. Please install Docker Desktop first.%n%nDownload: https://www.docker.com/products/docker-desktop
-chinesesimplified.DockerNotRunning=Docker Desktop is not running. Start it now?
-chinesesimplified.InstallingServices=Starting ThingsPanel services. The first start may take several minutes.
 english.DockerNotFound=Docker Desktop not found. Please install Docker Desktop first.%n%nDownload: https://www.docker.com/products/docker-desktop
 english.DockerNotRunning=Docker Desktop is not running. Start it now?
 english.InstallingServices=Starting ThingsPanel services. The first start may take several minutes.

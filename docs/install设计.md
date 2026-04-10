@@ -51,7 +51,7 @@ curl -fsSL https://install.thingspanel.io/install.sh | bash
 ```
 1. 优先使用环境变量 TP_VERSION
 2. 否则从 GitHub API 获取最新版本
-   curl https://api.github.com/repos/ThingsPanel/all-in-one-assembler/releases/latest
+   curl https://api.github.com/repos/ThingsPanel/thingspanel-installer/releases/latest
 3. 默认版本: v1.1.14
 ```
 

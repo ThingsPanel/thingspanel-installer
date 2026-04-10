@@ -7,20 +7,11 @@
 set -euo pipefail
 
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="ThingsPanel/all-in-one-assembler"
+REPO="ThingsPanel/thingspanel-installer"
 RAW_BASE="https://install.thingspanel.io"
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; RESET='\033[0m'
-
-info()    { echo -e "${BLUE}[INFO]${RESET}  $*"; }
-success() { echo -e "${GREEN}[OK]${RESET}    $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
-error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; exit 1; }
-step()    { echo -e "\n${BOLD}▶ $*${RESET}"; }
-
-REPO="ThingsPanel/all-in-one-assembler"
-RAW_BASE="https://install.thingspanel.io"
 
 info()    { echo -e "${BLUE}[INFO]${RESET}  $*"; }
 success() { echo -e "${GREEN}[OK]${RESET}    $*"; }

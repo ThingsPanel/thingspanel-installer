@@ -27,7 +27,7 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Version: ${VERSION}"
 
-  # ── 验证 docker-compose.yml 语法 ───────────────────────────────────────────
+  # ── 验证基础文件 ────────────────────────────────────────────────────────────
   validate:
     runs-on: ubuntu-latest
     needs: prepare
@@ -44,6 +44,12 @@ jobs:
       - name: Validate docker-compose syntax
         run: docker compose config --quiet
 
+      - name: Validate nginx config syntax
+        run: |
+          if [ -f niginx.conf ]; then
+            docker run --rm -v "$PWD/niginx.conf:/etc/nginx/nginx.conf:ro" nginx:alpine nginx -t
+          fi
+
       - name: Check script syntax (bash)
         run: |
           bash -n install.bash
@@ -51,52 +57,9 @@ jobs:
           bash -n upgrade.sh
           bash -n uninstall.sh
 
-  # ── 打包离线镜像 ─────────────────────────────────────────────────────────────
-  package-offline:
-    runs-on: ubuntu-latest
-    needs: prepare
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Create .env
-        run: |
-          cat > .env << 'EOF'
-          DATA_DIR=./data
-          TZ=Asia/Shanghai
-          EOF
-
-      - name: List images
-        run: |
-          docker compose config --images > images.txt
-          cat images.txt
-
-      - name: Pull images
-        run: |
-          while read img; do
-            docker pull "$img"
-          done < images.txt
-
-      - name: Package and split images
-        run: |
-          set -euo pipefail
-          docker save $(cat images.txt) -o images.tar
-          # GitHub Release 单文件上限 2GB，拆分为 1.9GB 分片
-          split -b 1900m -d -a 3 images.tar images.tar.part-
-          rm -f images.tar
-          ls -lh images.tar.part-* | cat
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-images-parts
-          path: |
-            images.tar.part-*
-            images.txt
-          retention-days: 1
-
   build-windows:
     runs-on: windows-latest
-    needs: [prepare, validate, package-offline]
+    needs: [prepare, validate]
     steps:
       - uses: actions/checkout@v4
 
@@ -120,7 +83,7 @@ jobs:
         env:
           TP_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          mkdir dist\windows 2>nul || true
+          if not exist dist\windows mkdir dist\windows
           "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DTP_VERSION=%TP_VERSION% packaging\windows\ThingsPanel-Setup.iss
 
       - name: Upload Windows artifact
@@ -132,18 +95,9 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
-    needs: [prepare, validate, package-offline]
+    needs: [prepare, validate]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Create placeholder resources (if not exists)
-        run: |
-          mkdir -p packaging/macos/resources
-          [ -f packaging/macos/resources/welcome.html ]    || echo "<html><body><h2>欢迎安装 ThingsPanel</h2></body></html>" > packaging/macos/resources/welcome.html
-          [ -f packaging/macos/resources/readme.html ]     || echo "<html><body><h2>说明</h2><p>ThingsPanel 是一个开...</p></body></html>" > packaging/macos/resources/readme.html
-          [ -f packaging/macos/resources/license.html ]    || echo "<html><body><h2>许可证</h2><p>Apache 2.0</p></body></html>" > packaging/macos/resources/license.html
-          [ -f packaging/macos/resources/conclusion.html ] || echo "<html><body><h2>安装完成</h2><p>访问 http://localhost:8080</p></body></html>" > packaging/macos/resources/conclusion.html
-          [ -f packaging/macos/resources/background.png ]  || echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=" | base64 -d > packaging/macos/resources/background.png
 
       - name: Make scripts executable
         run: |
@@ -183,19 +137,14 @@ jobs:
           name: macos-installer
           path: dist/macos
 
-      - name: Download offline images parts
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-images-parts
-          path: dist
-
       - name: Generate SHA256 checksums
         run: |
           cd dist
           touch SHA256SUMS.txt
-          find . -type f \( -name "*.exe" -o -name "*.pkg" -o -name "images.tar.part-*" \) | sort | while read f; do
+          find . -type f \( -name "*.exe" -o -name "*.pkg" \) | sort | while read f; do
             sha256sum "$f" >> SHA256SUMS.txt
           done
+          sha256sum ../install.sh >> SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create Release
@@ -222,20 +171,11 @@ jobs:
             ### 前置要求
             - Docker Desktop（Windows / macOS）或 Docker Engine（Linux）
             - 内存 ≥ 2GB
-
-            ### 文件说明
-            | 文件 | 平台 | 说明 |
-            |------|------|------|
-            | `ThingsPanel-Setup-*.exe` | Windows | Inno Setup 安装向导 |
-            | `ThingsPanel-*.pkg` | macOS | macOS 安装包 |
-            | `images.tar.part-*` | Windows/Linux/macOS | 离线 Docker 镜像分片（可选，放到安装目录后会自动加载） |
-            | `install.sh` | Linux/macOS | 一行命令安装脚本 |
           draft: false
           prerelease: ${{ contains(needs.prepare.outputs.version, 'rc') || contains(needs.prepare.outputs.version, 'beta') }}
           files: |
             dist/windows/*.exe
             dist/macos/*.pkg
-            dist/images.tar.part-*
             dist/SHA256SUMS.txt
             install.sh
             upgrade.sh

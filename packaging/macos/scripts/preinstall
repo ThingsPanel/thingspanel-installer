@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -e
+
+if [ ! -d "/Applications/Docker.app" ]; then
+  osascript -e 'display dialog "ThingsPanel requires Docker Desktop. Please install Docker Desktop first." buttons {"Open Download Page", "Cancel"} default button "Open Download Page" with icon stop' 2>/dev/null && \
+    open "https://www.docker.com/products/docker-desktop" || true
+  exit 1
+fi

@@ -25,7 +25,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$REPO     = "ThingsPanel/all-in-one-assembler"
+$REPO     = "ThingsPanel/thingspanel-installer"
 $RAW_BASE = "https://install.thingspanel.io"
 
 function Write-Info    ($m) { Write-Host "[INFO]  $m" -ForegroundColor Cyan }

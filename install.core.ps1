@@ -14,7 +14,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
     powershell -Command "chcp 65001 > `$null" 2>$null
 }
 
-$REPO          = "ThingsPanel/all-in-one-assembler"
+$REPO          = "ThingsPanel/thingspanel-installer"
 $RAW_BASE      = "https://install.thingspanel.io"
 $INSTALL_DIR   = "C:\ThingsPanel"
 $MIN_DOCKER_VER = "20.10"
@@ -136,6 +136,7 @@ Write-Step "Verifying installation"
 $url = "http://localhost:$HttpPort/health"
 $maxWait = 60
 $waited = 0
+$ready = $false
 
 Write-Info "Waiting for web service..."
 while ($waited -lt $maxWait) {
@@ -143,6 +144,7 @@ while ($waited -lt $maxWait) {
         $resp = Invoke-WebRequest -Uri $url -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
         if ($resp.StatusCode -eq 200) {
             Write-Success "Web service ready: http://localhost:$HttpPort"
+            $ready = $true
             break
         }
     } catch { }
@@ -151,7 +153,9 @@ while ($waited -lt $maxWait) {
     Write-Host -NoNewline "."
 }
 Write-Host ""
-Write-Warn "Web service not responding yet. Please visit http://localhost:$HttpPort shortly."
+if (-not $ready) {
+    Write-Warn "Web service not responding yet. Please visit http://localhost:$HttpPort shortly."
+}
 
 # ── 创建桌面快捷方式 ──────────────────────────────────────────────────────────
 Write-Step "Creating desktop shortcut"

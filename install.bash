@@ -11,7 +11,7 @@
 set -eu
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
-REPO="ThingsPanel/all-in-one-assembler"
+REPO="ThingsPanel/thingspanel-installer"
 RAW_BASE="https://install.thingspanel.io"
 INSTALL_DIR="${INSTALL_DIR:-/opt/thingspanel}"
 HTTP_PORT="${HTTP_PORT:-8080}"

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -e
+
+INSTALL_DIR="/opt/thingspanel"
+chmod +x "$INSTALL_DIR"/*.sh
+
+DOCKER_READY=false
+for i in $(seq 1 20); do
+  if /usr/local/bin/docker info >/dev/null 2>&1 || /opt/homebrew/bin/docker info >/dev/null 2>&1 || /usr/bin/docker info >/dev/null 2>&1; then
+    DOCKER_READY=true
+    break
+  fi
+  if [ "$i" -eq 1 ]; then
+    open -a Docker || true
+  fi
+  sleep 3
+done
+
+if ! $DOCKER_READY; then
+  osascript -e 'display dialog "Docker Desktop is not ready yet. Start Docker Desktop, then run: sudo /opt/thingspanel/install.bash" buttons {"OK"} default button "OK" with icon caution' 2>/dev/null || true
+  exit 0
+fi
+
+nohup bash "$INSTALL_DIR/install.bash" >/var/log/thingspanel-install.log 2>&1 &
+osascript -e 'display notification "ThingsPanel is starting in the background." with title "ThingsPanel"' 2>/dev/null || true

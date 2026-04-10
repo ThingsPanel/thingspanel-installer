@@ -2,8 +2,8 @@
 
 > 一行命令，部署完整 ThingsPanel IoT 平台
 
-[![Release](https://img.shields.io/github/v/release/ThingsPanel/all-in-one-assembler)](https://github.com/ThingsPanel/all-in-one-assembler/releases)
-[![Validate](https://github.com/ThingsPanel/all-in-one-assembler/actions/workflows/validate.yml/badge.svg)](https://github.com/ThingsPanel/all-in-one-assembler/actions)
+[![Release](https://img.shields.io/github/v/release/ThingsPanel/thingspanel-installer)](https://github.com/ThingsPanel/thingspanel-installer/releases)
+[![Validate](https://github.com/ThingsPanel/thingspanel-installer/actions/workflows/validate.yml/badge.svg)](https://github.com/ThingsPanel/thingspanel-installer/actions)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 ---
@@ -18,11 +18,15 @@ curl -fsSL https://install.thingspanel.io/install.sh | sh
 
 安装完成后访问：**http://localhost:8080**
 
+### 离线安装
+
+如果需要离线安装，请先从 Release 下载 `images.tar.part-*`，然后把这些文件和 `install.sh` 放到同一个目录再执行安装。脚本会自动检测本地镜像分片并优先加载，不需要额外参数。
+
 ---
 
 ### Windows
 
-1. 下载最新 [ThingsPanel-Setup.exe](https://github.com/ThingsPanel/all-in-one-assembler/releases/latest)
+1. 下载最新 [ThingsPanel-Setup.exe](https://github.com/ThingsPanel/thingspanel-installer/releases/latest)
 2. 右键 → **以管理员身份运行**
 3. 按向导完成安装
 
@@ -32,7 +36,7 @@ curl -fsSL https://install.thingspanel.io/install.sh | sh
 
 ### macOS（图形界面）
 
-1. 下载最新 [ThingsPanel-x.x.x.pkg](https://github.com/ThingsPanel/all-in-one-assembler/releases/latest)
+1. 下载最新 [ThingsPanel-x.x.x.pkg](https://github.com/ThingsPanel/thingspanel-installer/releases/latest)
 2. 双击安装
 3. 等待安装完成，访问 **http://localhost:8080**
 

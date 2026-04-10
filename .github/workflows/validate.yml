@@ -37,7 +37,12 @@ jobs:
       - name: Validate nginx config syntax
         run: |
           if [ -f niginx.conf ]; then
-            docker run --rm -v "$PWD/niginx.conf:/etc/nginx/nginx.conf:ro" nginx:alpine nginx -t
+            docker run --rm \
+              --add-host backend:127.0.0.1 \
+              --add-host thingsvis-server:127.0.0.1 \
+              --add-host thingsvis-studio:127.0.0.1 \
+              -v "$PWD/niginx.conf:/etc/nginx/nginx.conf:ro" \
+              nginx:alpine nginx -t
           fi
 
       - name: Lint shell scripts (shellcheck)

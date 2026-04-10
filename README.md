@@ -89,6 +89,10 @@ docker compose -f /opt/thingspanel/docker-compose.yml down
 
 # 启动所有服务
 docker compose -f /opt/thingspanel/docker-compose.yml up -d
+
+# 删除所有服务、镜像、数据、网络
+docker compose -f /opt/thingspanel/docker-compose.yml down --rmi all -v --remove-orphans
+
 ```
 
 ---

@@ -3,7 +3,7 @@
 #define AppName "ThingsPanel"
 #define AppVersion GetEnv('TP_VERSION')
 #if AppVersion == ""
-  #define AppVersion "v1.1.14"
+  #define AppVersion "v1.1.14.1"
 #endif
 #define AppPublisher "ThingsPanel Community"
 #define AppURL "https://thingspanel.io"

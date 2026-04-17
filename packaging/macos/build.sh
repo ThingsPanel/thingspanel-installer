@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-VERSION="${TP_VERSION:-v1.1.14}"
+VERSION="${TP_VERSION:-v1.1.14.1}"
 DIST_DIR="$ROOT_DIR/dist/macos"
 BUILD_DIR="$SCRIPT_DIR/.build"
 PAYLOAD_DIR="$BUILD_DIR/payload"

@@ -1,6 +1,10 @@
 name: Release — Build & Publish
 
 on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*.*'
   workflow_dispatch:
     inputs:
       version:
@@ -23,7 +27,11 @@ jobs:
       - id: version
         name: Resolve version
         run: |
-          VERSION="${{ inputs.version }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Version: ${VERSION}"
 

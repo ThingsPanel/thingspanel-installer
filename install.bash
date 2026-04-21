@@ -18,6 +18,7 @@ HTTP_PORT="${HTTP_PORT:-8080}"
 MQTT_PORT="${MQTT_PORT:-1883}"
 MIN_DOCKER_VERSION="20.10"
 MIN_COMPOSE_VERSION="2.0"
+SUDO_CMD=""
 
 # ── 颜色输出 ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
@@ -34,6 +35,74 @@ command_exists() { command -v "$1" >/dev/null 2>&1; }
 
 version_gte() {
     printf '%s\n%s\n' "$2" "$1" | sort -V -C
+}
+
+run_privileged() {
+    if [ -n "$SUDO_CMD" ]; then
+        "$SUDO_CMD" "$@"
+    else
+        "$@"
+    fi
+}
+
+ensure_install_dir_access() {
+    step "检查安装目录权限"
+
+    if [ "$(id -u)" -eq 0 ]; then
+        success "当前用户可写入 $INSTALL_DIR"
+        return
+    fi
+
+    if [ -d "$INSTALL_DIR" ] && [ -w "$INSTALL_DIR" ]; then
+        success "当前用户可写入 $INSTALL_DIR"
+        return
+    fi
+
+    local parent_dir
+    parent_dir="$INSTALL_DIR"
+    while [ ! -d "$parent_dir" ]; do
+        local next_parent
+        next_parent="$(dirname "$parent_dir")"
+        if [ "$next_parent" = "$parent_dir" ]; then
+            break
+        fi
+        parent_dir="$next_parent"
+    done
+
+    if [ ! -d "$INSTALL_DIR" ] && [ -d "$parent_dir" ] && [ -w "$parent_dir" ]; then
+        success "当前用户可创建 $INSTALL_DIR"
+        return
+    fi
+
+    if ! command_exists sudo; then
+        error "当前用户没有权限写入 ${INSTALL_DIR}，且未找到 sudo。请使用有权限的用户运行，或设置 INSTALL_DIR 到可写目录。"
+    fi
+
+    SUDO_CMD="sudo"
+    info "${INSTALL_DIR} 需要管理员权限，接下来会通过 sudo 创建和写入安装文件。"
+    run_privileged -v || error "无法获取 sudo 权限，安装已停止"
+    success "已获得安装目录写入权限"
+}
+
+download_file() {
+    local url="$1"
+    local target="$2"
+    local mode="$3"
+    local tmp_file
+
+    tmp_file="$(mktemp "${TMPDIR:-/tmp}/thingspanel.XXXXXX")"
+
+    if command_exists curl; then
+        curl -fsSL "$url" -o "$tmp_file"
+    elif command_exists wget; then
+        wget -qO "$tmp_file" "$url"
+    else
+        rm -f "$tmp_file"
+        error "未找到 curl 或 wget，无法下载安装文件"
+    fi
+
+    run_privileged install -m "$mode" "$tmp_file" "$target"
+    rm -f "$tmp_file"
 }
 
 # ── Banner ────────────────────────────────────────────────────────────────────
@@ -142,7 +211,7 @@ resolve_version() {
 # ── 创建目录结构 ───────────────────────────────────────────────────────────────
 setup_directories() {
     step "创建目录结构"
-    mkdir -p "$INSTALL_DIR"
+    run_privileged mkdir -p "$INSTALL_DIR"
     success "目录: $INSTALL_DIR"
 }
 
@@ -151,13 +220,7 @@ download_docker_compose() {
     step "下载 docker-compose.yml"
     local compose_url="${RAW_BASE}/docker-compose.yml"
 
-    if command_exists curl; then
-        curl -fsSL "$compose_url" -o "${INSTALL_DIR}/docker-compose.yml"
-    elif command_exists wget; then
-        wget -qO "${INSTALL_DIR}/docker-compose.yml" "$compose_url"
-    else
-        error "未找到 curl 或 wget，无法下载配置文件"
-    fi
+    download_file "$compose_url" "${INSTALL_DIR}/docker-compose.yml" "0644"
     success "配置文件已下载到 $INSTALL_DIR"
 }
 
@@ -165,12 +228,7 @@ download_docker_compose() {
 download_management_scripts() {
     step "下载管理脚本"
     for script in upgrade.sh uninstall.sh; do
-        if command_exists curl; then
-            curl -fsSL "${RAW_BASE}/${script}" -o "${INSTALL_DIR}/${script}"
-        else
-            wget -qO "${INSTALL_DIR}/${script}" "${RAW_BASE}/${script}"
-        fi
-        chmod +x "${INSTALL_DIR}/${script}"
+        download_file "${RAW_BASE}/${script}" "${INSTALL_DIR}/${script}" "0755"
     done
     success "管理脚本已就绪"
 }
@@ -255,6 +313,7 @@ main() {
     check_ports
     check_memory
     resolve_version
+    ensure_install_dir_access
     setup_directories
     download_docker_compose
     download_management_scripts

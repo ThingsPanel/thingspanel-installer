@@ -124,8 +124,7 @@ services:
       - "MODBUS_MQTT_QOS=0"
       - "MODBUS_EXCEPTION_REPORT_ENABLED=true"
     networks:
-      thingspanel_network:
-        ipv4_address: 172.20.0.10
+      - thingspanel_network
     depends_on:
       - backend
       - gmqtt
@@ -143,8 +142,7 @@ services:
       - "P_PLATFORM_URL=http://backend:9999"
       - "P_PLATFORM_MQTT_BROKER=tcp://gmqtt:1883"
     networks:
-      thingspanel_network:
-        ipv4_address: 172.20.0.11
+      - thingspanel_network
     depends_on:
       - backend
       - gmqtt
@@ -205,8 +203,3 @@ volumes:
 networks:
   thingspanel_network:
     driver: bridge
-    ipam:
-      driver: default
-      config:
-        - subnet: 172.20.0.0/16
-          gateway: 172.20.0.1

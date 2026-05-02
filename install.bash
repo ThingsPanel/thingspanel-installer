@@ -199,9 +199,9 @@ resolve_version() {
                 | grep '"tag_name"' | head -1 \
                 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/' || true)
         fi
-        VERSION="${VERSION:-v1.1.14.2}"
+        VERSION="${VERSION:-v1.1.14.3}"
         if [ -z "$VERSION" ]; then
-            VERSION="v1.1.14.2"
+            VERSION="v1.1.14.3"
         fi
         info "最新版本: $VERSION"
     fi

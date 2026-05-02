@@ -1,6 +1,6 @@
 services:
   frontend:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-vue:v1.1.14.2
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-vue:v1.1.14.3
     ports:
       - "8080:8080"
     environment:
@@ -39,7 +39,7 @@ services:
       - thingspanel_network
 
   gmqtt:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-gmqtt:v1.1.6
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-gmqtt:v1.1.7
     volumes:
       - gmqtt:/gmqttd
     ports:
@@ -82,7 +82,7 @@ services:
       - thingspanel_network
 
   backend:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.1.14.2
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.1.14.3
     ports:
       - "9999:9999"
     environment:
@@ -147,7 +147,7 @@ services:
       - backend
       - gmqtt
   thingsvis-server:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-server:v1.0.8
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-server:v1.0.9
     container_name: thingsvis-server
     restart: unless-stopped
     ports:
@@ -171,7 +171,7 @@ services:
       start_period: 120s
 
   thingsvis-studio:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-studio:v1.0.8
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-studio:v1.0.9
     container_name: thingsvis-studio
     restart: unless-stopped
     ports:

@@ -44,6 +44,8 @@ services:
       - gmqtt:/gmqttd
     ports:
       - "1883:1883"
+      - "8082:8082"
+      - "8083:8083"
     environment:
       - "TZ=Asia/Shanghai"
       - "GMQTT_DB_REDIS_CONN=redis:6379"

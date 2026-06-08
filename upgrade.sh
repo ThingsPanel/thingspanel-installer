@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # ThingsPanel All-in-One — 升级脚本
 # 用法: ./upgrade.sh [版本号]
-# 示例: ./upgrade.sh v1.2.2
+# 示例: ./upgrade.sh v1.2.0
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -30,7 +30,7 @@ main() {
             2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/' || true)
     fi
     if [ -z "$TARGET_VERSION" ]; then
-        error "无法获取最新版本，请手动指定：./upgrade.sh v1.2.2"
+        error "无法获取最新版本，请手动指定：./upgrade.sh v1.2.0"
     fi
     info "目标版本: $TARGET_VERSION"
 

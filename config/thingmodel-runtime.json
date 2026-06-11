@@ -1,0 +1,27 @@
+{
+  "$schema": "https://encore.dev/schemas/infra.schema.json",
+  "metadata": {
+    "app_id": "thingspanel",
+    "env_name": "production",
+    "env_type": "production",
+    "cloud": "local",
+    "base_url": "http://thingmodel-api:8080"
+  },
+  "sql_servers": [
+    {
+      "host": "postgres:5432",
+      "tls_config": {
+        "disabled": true
+      },
+      "databases": {
+        "device_metadata": {
+          "name": "device_metadata",
+          "username": "postgres",
+          "password": {"$env": "POSTGRES_PASSWORD"}
+        }
+      }
+    }
+  ],
+  "hosted_services": ["authn", "devicemetadata", "automation", "control", "devices", "notification", "pluginmgr", "telemetry", "verifier"],
+  "hosted_gateways": ["api-gateway"]
+}

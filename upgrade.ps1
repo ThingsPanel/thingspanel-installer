@@ -14,7 +14,7 @@
 
 .EXAMPLE
     .\upgrade.ps1
-    .\upgrade.ps1 -TargetVersion v1.2.4
+    .\upgrade.ps1 -TargetVersion v1.2.5
 #>
 
 [CmdletBinding()]

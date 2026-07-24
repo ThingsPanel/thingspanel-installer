@@ -34,3 +34,9 @@ packaging/macos/.build/
 # 临时补丁脚本（本地开发工具，不提交）
 patch_*.py
 rewrite_*.py
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example

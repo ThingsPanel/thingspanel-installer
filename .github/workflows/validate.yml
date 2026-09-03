@@ -15,6 +15,7 @@ on:
       - 'uninstall.ps1'
       - '*.bash'
       - 'packaging/**'
+      - 'VERSION'
       - '.github/workflows/validate.yml'
       - '.github/workflows/release.yml'
 
@@ -23,6 +24,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate release version
+        run: |
+          VERSION="$(tr -d '\r\n' < VERSION)"
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
 
       - name: Create test .env
         run: |

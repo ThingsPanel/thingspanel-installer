@@ -108,7 +108,7 @@ docker compose -f /opt/thingspanel/docker-compose.yml down --rmi all -v --remove
 /opt/thingspanel/upgrade.sh
 
 # 指定版本
-/opt/thingspanel/upgrade.sh v1.2.10
+/opt/thingspanel/upgrade.sh v1.2.11
 
 # Windows (管理员 PowerShell)
 C:\ThingsPanel\upgrade.ps1

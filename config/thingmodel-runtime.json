@@ -22,6 +22,6 @@
       }
     }
   ],
-  "hosted_services": ["authn", "devicemetadata", "automation", "control", "devices", "notification", "pluginmgr", "telemetry", "verifier"],
-  "hosted_gateways": ["api-gateway"]
+    "hosted_services": ["authn", "devicemetadata"],
+    "hosted_gateways": []
 }

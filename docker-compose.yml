@@ -1,8 +1,8 @@
 services:
   frontend:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-vue:v1.2.2
+    image: ${FRONTEND_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-vue:v1.2.2}
     ports:
-      - "8080:8080"
+      - "${FRONTEND_HOST_PORT:-8080}:8080"
     environment:
       - "TZ=Asia/Shanghai"
       - "BACKEND_HOST=http://backend:9999"
@@ -16,18 +16,18 @@ services:
       - thingspanel_network
 
   postgres:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/timescaledb:14
+    image: ${POSTGRES_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/timescaledb:14}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d:ro
     ports:
-      - "5555:5432"
+      - "${POSTGRES_HOST_PORT:-5555}:5432"
     environment:
       - "TZ=Asia/Shanghai"
       - "LC_ALL=C.UTF-8"
       - "POSTGRES_DB=ThingsPanel"
       - "POSTGRES_USER=postgres"
-      - "POSTGRES_PASSWORD=postgresThingsPanel"
+      - "POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgresThingsPanel}"
       - "POSTGRES_HOST_AUTH_METHOD=md5"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d ThingsPanel"]
@@ -40,13 +40,13 @@ services:
       - thingspanel_network
 
   gmqtt:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-gmqtt:v1.1.7
+    image: ${GMQTT_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-gmqtt:v1.1.7}
     volumes:
       - gmqtt:/gmqttd
     ports:
-      - "1883:1883"
-      - "8082:8082"
-      - "8083:8083"
+      - "${MQTT_HOST_PORT:-1883}:1883"
+      - "${GMQTT_WEB_HOST_PORT:-8082}:8082"
+      - "${GMQTT_WS_HOST_PORT:-8083}:8083"
     environment:
       - "TZ=Asia/Shanghai"
       - "GMQTT_DB_REDIS_CONN=redis:6379"
@@ -55,7 +55,7 @@ services:
       - "GMQTT_DB_PSQL_PSQLPORT=5432"
       - "GMQTT_DB_PSQL_PSQLDB=ThingsPanel"
       - "GMQTT_DB_PSQL_PSQLUSER=postgres"
-      - "GMQTT_DB_PSQL_PSQLPASS=postgresThingsPanel"
+      - "GMQTT_DB_PSQL_PSQLPASS=${POSTGRES_PASSWORD:-postgresThingsPanel}"
     hostname: gmqtt
     depends_on:
       postgres:
@@ -72,7 +72,7 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
     environment:
       - "TZ=Asia/Shanghai"
     healthcheck:
@@ -85,15 +85,19 @@ services:
       - thingspanel_network
 
   backend:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.2.2
+    image: ${BACKEND_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.2.2}
+    env_file:
+      - path: ${TP_NOTIFICATION_DATA_DIR:-./data/notification}/legacy-reader.env
+        required: false
+        format: raw
     ports:
-      - "9999:9999"
+      - "${BACKEND_HOST_PORT:-9999}:9999"
     environment:
       - "TZ=Asia/Shanghai"
       - "GOTP_DB_PSQL_HOST=postgres"
       - "GOTP_DB_PSQL_PORT=5432"
       - "GOTP_DB_PSQL_USERNAME=postgres"
-      - "GOTP_DB_PSQL_PASSWORD=postgresThingsPanel"
+      - "GOTP_DB_PSQL_PASSWORD=${POSTGRES_PASSWORD:-postgresThingsPanel}"
       - "GOTP_DB_PSQL_DBNAME=ThingsPanel"
       - "GOTP_DB_PSQL_LOG_LEVEL=3"
       - "GOTP_DB_REDIS_ADDR=redis:6379"
@@ -118,7 +122,7 @@ services:
       - thingspanel_network
 
   thingmodel-api:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingmodel-api:latest
+    image: ${THINGMODEL_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingmodel-api:preview-20261010}
     # 不对外暴露端口 — 通过 nginx /proxy-thingmodel/ 内部代理访问
     environment:
       - "TZ=Asia/Shanghai"
@@ -136,11 +140,183 @@ services:
     networks:
       - thingspanel_network
 
+  notification-setup:
+    image: ${NOTIFICATION_CORE_IMAGE:-thingspanel/notification-core:preview-20261010}
+    pull_policy: never
+    entrypoint: ["/usr/local/bin/notification-setup"]
+    environment:
+      NOTIFICATION_SETUP_DIR: /var/lib/thingspanel-notification
+      NOTIFICATION_SETUP_TEMPLATE: /run/notification-input/notification-runtime.json.template
+      NOTIFICATION_SETUP_SYSTEM_CA: /etc/ssl/certs/ca-certificates.crt
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgresThingsPanel}
+      TP_JWT_KEY: ${TP_JWT_KEY:-1hj5b0sp9}
+      NOTIFICATION_PRIVATE_CIDR: ${NOTIFICATION_PRIVATE_CIDR:-172.30.254.0/28}
+      NOTIFICATION_LEGACY_BASE_URL: https://notification-smtp-tls:8443
+    volumes:
+      - ${TP_NOTIFICATION_DATA_DIR:-./data/notification}:/var/lib/thingspanel-notification
+      - ./config/notification-runtime.json.template:/run/notification-input/notification-runtime.json.template:ro
+    user: "${TP_INSTALLER_UID:-1000}:${TP_INSTALLER_GID:-1000}"
+    restart: "no"
+
+  notification-db-init:
+    image: ${POSTGRES_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/timescaledb:14}
+    entrypoint: ["psql"]
+    command: ["--host=postgres", "--port=5432", "--username=postgres", "--dbname=ThingsPanel", "--set=ON_ERROR_STOP=1", "--file=/run/notification/notification-create-db.sql"]
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgresThingsPanel}
+    volumes:
+      - ./init-db/notification-create-db.sql:/run/notification/notification-create-db.sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - thingspanel_network
+    restart: "no"
+
+  notification-migrate:
+    image: ${NOTIFICATION_CORE_IMAGE:-thingspanel/notification-core:preview-20261010}
+    pull_policy: never
+    entrypoint: ["/usr/local/bin/notification-migrate"]
+    env_file:
+      - path: ${TP_NOTIFICATION_DATA_DIR:-./data/notification}/db.env
+        required: false
+        format: raw
+      - path: ${TP_NOTIFICATION_DATA_DIR:-./data/notification}/migrate.env
+        required: false
+        format: raw
+    volumes:
+      - ${TP_NOTIFICATION_DATA_DIR:-./data/notification}:/var/lib/thingspanel-notification
+    depends_on:
+      notification-setup:
+        condition: service_completed_successfully
+      notification-db-init:
+        condition: service_completed_successfully
+    networks:
+      - thingspanel_network
+    restart: "no"
+
+  notification-smtp:
+    image: ${NOTIFICATION_SMTP_IMAGE:-thingspanel/notification-smtp:preview-20261010}
+    pull_policy: never
+    env_file:
+      - path: ${TP_NOTIFICATION_DATA_DIR:-./data/notification}/smtp.env
+        required: false
+        format: raw
+    environment:
+      NOTIFICATION_PLUGIN_LISTEN: 0.0.0.0:5005
+    expose:
+      - "5005"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - notification_private
+    depends_on:
+      notification-setup:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  notification-smtp-tls:
+    image: caddy:2.10.0-alpine
+    env_file:
+      - path: ${TP_NOTIFICATION_DATA_DIR:-./data/notification}/smtp.env
+        required: false
+        format: raw
+    volumes:
+      - ./config/notification-caddyfile:/etc/caddy/Caddyfile:ro
+      - type: bind
+        source: ${TP_NOTIFICATION_DATA_DIR:-./data/notification}/tls/server.crt
+        target: /run/tls/tls.crt
+        read_only: true
+      - type: bind
+        source: ${TP_NOTIFICATION_DATA_DIR:-./data/notification}/tls/server.key
+        target: /run/tls/tls.key
+        read_only: true
+    expose:
+      - "8443"
+    read_only: true
+    tmpfs:
+      - /data:size=16m,noexec,nosuid
+      - /config:size=16m,noexec,nosuid
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    networks:
+      thingspanel_network: {}
+      notification_private:
+        aliases:
+          - notification-smtp-tls
+    depends_on:
+      notification-smtp:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8081/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  notification-core:
+    image: ${NOTIFICATION_CORE_IMAGE:-thingspanel/notification-core:preview-20261010}
+    pull_policy: never
+    env_file:
+      - path: ${TP_NOTIFICATION_DATA_DIR:-./data/notification}/core.env
+        required: false
+        format: raw
+      - path: ${TP_NOTIFICATION_DATA_DIR:-./data/notification}/db.env
+        required: false
+        format: raw
+    environment:
+      ENCORE_INFRA_CONFIG_PATH: /run/notification/infra.json
+      NOTIFICATION_ENCORE_INFRA_CONFIG_PATH: /run/notification/infra.json
+      SSL_CERT_FILE: /run/notification/tls/system-ca-bundle.pem
+    volumes:
+      - ${TP_NOTIFICATION_DATA_DIR:-./data/notification}:/run/notification:ro
+    ports:
+      - "127.0.0.1:${NOTIFICATION_CORE_HOST_PORT:-25640}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      notification-migrate:
+        condition: service_completed_successfully
+      notification-smtp-tls:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/notification-setup", "healthcheck"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 30s
+    networks:
+      - thingspanel_network
+      - notification_private
+    restart: unless-stopped
+
+  notification-nginx-setup:
+    profiles: ["notification-tools"]
+    image: ${NOTIFICATION_CORE_IMAGE:-thingspanel/notification-core:preview-20261010}
+    pull_policy: never
+    entrypoint: ["/usr/local/bin/notification-setup"]
+    environment:
+      NOTIFICATION_SETUP_MODE: nginx
+      NOTIFICATION_SETUP_NGINX_DIR: /var/lib/nginx
+      NOTIFICATION_SETUP_NGINX_SNIPPET: /run/notification-input/notification-routes.conf
+    volumes:
+      - nginx:/var/lib/nginx
+      - ./config/notification-routes.conf:/run/notification-input/notification-routes.conf:ro
+    restart: "no"
+
   modbus_service:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/modbus-protocol-plugin:v1.0.6.1
     ports:
-      - "502:502"
-      - "503:503"
+      - "${MODBUS_TCP_HOST_PORT:-502}:502"
+      - "${MODBUS_ALT_HOST_PORT:-503}:503"
     environment:
       - "MODBUS_THINGSPANEL_ADDRESS=http://backend:9999"
       - "MODBUS_MQTT_BROKER=gmqtt:1883"
@@ -156,8 +332,8 @@ services:
   http_adapter:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-adapter-http:v1.0.0
     ports:
-      - "19090:19090"
-      - "19091:19091"
+      - "${HTTP_ADAPTER_TCP_HOST_PORT:-19090}:19090"
+      - "${HTTP_ADAPTER_HTTP_HOST_PORT:-19091}:19091"
     environment:
       - "TZ=Asia/Shanghai"
       - "P_SERVER_PORT=19090"
@@ -170,11 +346,10 @@ services:
       - backend
       - gmqtt
   thingsvis-server:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-server:v1.0.13
-    container_name: thingsvis-server
+    image: ${THINGSVIS_SERVER_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-server:v1.0.13}
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "${THINGSVIS_SERVER_HOST_PORT:-8000}:8000"
     environment:
       - NODE_ENV=production
       - HOSTNAME=0.0.0.0
@@ -194,11 +369,10 @@ services:
       start_period: 120s
 
   thingsvis-studio:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-studio:v1.0.13
-    container_name: thingsvis-studio
+    image: ${THINGSVIS_STUDIO_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-studio:v1.0.13}
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${THINGSVIS_STUDIO_HOST_PORT:-3000}:3000"
     environment:
       - STUDIO_PORT=3000
       - SERVER_HOST=thingsvis-server
@@ -226,3 +400,8 @@ volumes:
 networks:
   thingspanel_network:
     driver: bridge
+  notification_private:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${NOTIFICATION_PRIVATE_CIDR:-172.30.254.0/28}

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://encore.dev/schemas/infra.schema.json",
+  "metadata": {
+    "app_id": "thingspanel",
+    "env_name": "production",
+    "env_type": "production",
+    "cloud": "local",
+    "base_url": "http://notification-core:8080"
+  },
+  "sql_servers": [
+    {
+      "host": "postgres:5432",
+      "tls_config": { "disabled": true },
+      "databases": {
+        "notification": {
+          "name": "notification",
+          "username": "postgres",
+          "password": { "$env": "POSTGRES_PASSWORD" }
+        }
+      }
+    }
+  ],
+  "hosted_services": ["authn", "notification"],
+  "hosted_gateways": []
+}

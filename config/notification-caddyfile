@@ -1,0 +1,19 @@
+{
+	admin off
+}
+
+notification-smtp-tls:8443 {
+	tls /run/tls/tls.crt /run/tls/tls.key
+	handle /api/v1/notification/* {
+		reverse_proxy backend:9999
+	}
+	handle {
+		reverse_proxy notification-smtp:5005
+	}
+}
+
+http://127.0.0.1:8081 {
+	reverse_proxy notification-smtp:5005 {
+		header_up Authorization "Bearer {env.NOTIFICATION_PLUGIN_TOKEN}"
+	}
+}

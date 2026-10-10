@@ -1,0 +1,21 @@
+{
+  "previewId": "notification-preview-20261010",
+  "repositories": {
+    "backend": {
+      "url": "https://github.com/ThingsPanel/thingspanel-backend-community.git",
+      "commit": "a89338e1860329ae87fc8a9102d64c9b460ec01d"
+    },
+    "frontend": {
+      "url": "https://github.com/ThingsPanel/thingspanel-frontend-community.git",
+      "commit": "83f65c40ee68e7909dc80047b82357c217d08a37"
+    },
+    "core": {
+      "url": "https://github.com/zjhong/iot-api-encore-kernel.git",
+      "commit": "448c674e41d4ae782481d0bc1ba3df1948878ac8"
+    },
+    "smtp": {
+      "url": "https://github.com/ThingsPanel/thingspanel-notification-smtp.git",
+      "commit": "43c9be6e177fd681d776d1c5c81c09eb58a50e3d"
+    }
+  }
+}

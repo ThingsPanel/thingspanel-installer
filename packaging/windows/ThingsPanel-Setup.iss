@@ -42,6 +42,22 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\..\docker-compose.yml"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\scripts\notification-init.sh"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\..\scripts\notification-init.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\..\scripts\notification-db-init.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\..\scripts\notification-nginx.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\..\scripts\notification-migrate.sh"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\..\scripts\notification-migrate.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\..\scripts\notification-db-init.sh"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\..\scripts\notification-nginx.sh"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\..\config\notification-runtime.json.template"; DestDir: "{app}\config"; Flags: ignoreversion
+Source: "..\..\config\notification-caddyfile"; DestDir: "{app}\config"; Flags: ignoreversion
+Source: "..\..\config\notification-routes.conf"; DestDir: "{app}\config"; Flags: ignoreversion
+Source: "..\..\config\thingmodel-runtime.json"; DestDir: "{app}\config"; Flags: ignoreversion
+Source: "..\..\init-db\notification-create-db.sql"; DestDir: "{app}\init-db"; Flags: ignoreversion
+Source: "..\..\init-db\00-timescale-extension.sh"; DestDir: "{app}\init-db"; Flags: ignoreversion
+Source: "..\..\init-db\01-create-thingmodel-db.sh"; DestDir: "{app}\init-db"; Flags: ignoreversion
+Source: "..\..\init-db\02-thingmodel-migrations.sh"; DestDir: "{app}\init-db"; Flags: ignoreversion
 Source: "..\..\install.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\install.core.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\upgrade.ps1"; DestDir: "{app}"; Flags: ignoreversion

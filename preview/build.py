@@ -32,6 +32,7 @@ def main():
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--arch', choices=('arm64', 'amd64'), required=True)
+    parser.add_argument('--encore-bin', default='encore', help='Encore CLI binary; validated preview uses 1.58.6')
     args = parser.parse_args()
     installer = Path(__file__).resolve().parents[1]
     lock = json.loads((installer / 'preview/source-lock.json').read_text())
@@ -86,7 +87,7 @@ def main():
         tags = {name: f'{prefix}-{name}:{lock["previewId"]}' for name in ('backend', 'frontend', 'core', 'smtp', 'thingmodel')}
         native = tags['core'] + '-native'
         for tag, services in ((native, 'notification,authn'), (tags['thingmodel'], 'devicemetadata,authn')):
-            run('encore', 'build', 'docker', tag, '--arch', args.arch, '--os', 'linux',
+            run(args.encore_bin, 'build', 'docker', tag, '--arch', args.arch, '--os', 'linux',
                 '--skip-config', '--services', services, cwd=roots['core'] / 'encore-api', env=build_env)
         # Native Encore supplies the public trust store used by setup and SMTP.
         container = run('docker', 'create', native, capture=True)
@@ -165,6 +166,7 @@ def main():
             image['archive'] = str(archive_path.relative_to(out))
             image['archiveSha256'] = sha(archive_path)
         manifest = dict(lock, installerCommit=installer_sha, architecture=args.arch, images=image_lock,
+                        encoreVersion=run(args.encore_bin, 'version', capture=True),
                         composeProject=env['COMPOSE_PROJECT_NAME'], expectedImages=images,
                         thingModelMigrations=[{'file': p.name, 'sha256': sha(p)} for p in migrations])
         (out / 'offline-images.lock.json').write_text(json.dumps(manifest, indent=2) + '\n')

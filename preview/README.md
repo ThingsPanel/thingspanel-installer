@@ -4,7 +4,7 @@
 
 ## 构建
 
-构建机器需要 Python 3.12、Go、pnpm、Encore CLI、Docker Engine 及 Docker Compose >= 2.30；构建期间需要联网下载依赖和基础镜像。源码仓库必须干净，提交必须与 `source-lock.json` 完全一致。Core 是私有仓库，需要访问权限。
+构建机器需要 Python 3.12、Go、pnpm、Encore CLI 1.58.6、Docker Engine 及 Docker Compose >= 2.30；构建期间需要联网下载依赖和基础镜像。源码仓库必须干净，提交必须与 `source-lock.json` 完全一致。Core 是私有仓库，需要访问权限。
 
 在安装器仓库执行，输出目录必须不存在：
 
@@ -14,7 +14,7 @@ python3 preview/build.py \
   --frontend /path/to/thingspanel-frontend-community \
   --core /path/to/iot-api-encore-kernel \
   --smtp /path/to/thingspanel-notification-smtp \
-  --arch arm64 --output /path/to/new-preview-bundle
+  --encore-bin /path/to/encore-1.58.6 --arch arm64 --output /path/to/new-preview-bundle
 ```
 
 `--arch amd64` 是构建选项，当前没有 amd64 实测交付。每个源码仓库只从 Git 提交归档，未提交改动和忽略的私密文件不进入包。镜像独立压缩以控制临时磁盘占用；归档校验、镜像 ID、架构和源提交均写入包的 `offline-images.lock.json`。

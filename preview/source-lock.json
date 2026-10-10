@@ -3,7 +3,7 @@
   "repositories": {
     "backend": {
       "url": "https://github.com/ThingsPanel/thingspanel-backend-community.git",
-      "commit": "a89338e1860329ae87fc8a9102d64c9b460ec01d"
+      "commit": "ba35997eaecfbb2ad0e1cf284d24a22c57a58629"
     },
     "frontend": {
       "url": "https://github.com/ThingsPanel/thingspanel-frontend-community.git",

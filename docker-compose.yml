@@ -1,208 +1,300 @@
 services:
   frontend:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-vue:v1.2.12.1
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-vue:v1.3.0
     ports:
-      - "8080:8080"
+    - 8080:8080
     environment:
-      - "TZ=Asia/Shanghai"
-      - "BACKEND_HOST=http://backend:9999"
+    - TZ=Asia/Shanghai
+    - BACKEND_HOST=http://backend:9999
     depends_on:
       backend:
         condition: service_started
+      encore-api:
+        condition: service_started
+      notification-core:
+        condition: service_started
     volumes:
-      - nginx:/etc/nginx
+    - ./niginx.conf:/etc/nginx/nginx.conf:ro
     restart: unless-stopped
     networks:
-      - thingspanel_network
-
+    - thingspanel_network
   postgres:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/timescaledb:14
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+    - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5555:5432"
+    - 5555:5432
     environment:
-      - "TZ=Asia/Shanghai"
-      - "LC_ALL=C.UTF-8"
-      - "POSTGRES_DB=ThingsPanel"
-      - "POSTGRES_USER=postgres"
-      - "POSTGRES_PASSWORD=postgresThingsPanel"
-      - "POSTGRES_HOST_AUTH_METHOD=md5"
+    - TZ=Asia/Shanghai
+    - LC_ALL=C.UTF-8
+    - POSTGRES_DB=ThingsPanel
+    - POSTGRES_USER=postgres
+    - POSTGRES_PASSWORD=${TP_DATABASE_PASSWORD:-postgresThingsPanel}
+    - POSTGRES_HOST_AUTH_METHOD=md5
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ThingsPanel"]
+      test:
+      - CMD-SHELL
+      - pg_isready -U postgres -d ThingsPanel
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 40s
     restart: unless-stopped
     networks:
-      - thingspanel_network
-
-  gmqtt:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-gmqtt:v1.1.7
-    volumes:
-      - gmqtt:/gmqttd
-    ports:
-      - "1883:1883"
-      - "8082:8082"
-      - "8083:8083"
-    environment:
-      - "TZ=Asia/Shanghai"
-      - "GMQTT_DB_REDIS_CONN=redis:6379"
-      - "GMQTT_DB_REDIS_PASSWORD=redis"
-      - "GMQTT_DB_PSQL_PSQLADDR=postgres"
-      - "GMQTT_DB_PSQL_PSQLPORT=5432"
-      - "GMQTT_DB_PSQL_PSQLDB=ThingsPanel"
-      - "GMQTT_DB_PSQL_PSQLUSER=postgres"
-      - "GMQTT_DB_PSQL_PSQLPASS=postgresThingsPanel"
-    hostname: gmqtt
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - thingspanel_network
-
+    - thingspanel_network
   redis:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/redis:6.2.7
     command: redis-server --requirepass redis
     volumes:
-      - redis_data:/data
+    - redis_data:/data
     ports:
-      - "6379:6379"
+    - 6379:6379
     environment:
-      - "TZ=Asia/Shanghai"
+    - TZ=Asia/Shanghai
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+      - CMD
+      - redis-cli
+      - ping
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
     networks:
-      - thingspanel_network
-
+    - thingspanel_network
   backend:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.2.12.1
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.3.0
     ports:
-      - "9999:9999"
+    - 9999:9999
     environment:
-      - "TZ=Asia/Shanghai"
-      - "GOTP_DB_PSQL_HOST=postgres"
-      - "GOTP_DB_PSQL_PORT=5432"
-      - "GOTP_DB_PSQL_USERNAME=postgres"
-      - "GOTP_DB_PSQL_PASSWORD=postgresThingsPanel"
-      - "GOTP_DB_PSQL_DBNAME=ThingsPanel"
-      - "GOTP_DB_PSQL_LOG_LEVEL=3"
-      - "GOTP_DB_REDIS_ADDR=redis:6379"
-      - "GOTP_DB_REDIS_PASSWORD=redis"
-      - "GOTP_MQTT_SERVER=gmqtt"
-      - "GOTP_MQTT_ACCESS_ADDRESS=gmqtt:1883"
-      - "GOTP_MQTT_BROKER=gmqtt:1883"
-      - "GOTP_LOG_LEVEL=error"
-      - "GOTP_THINGSVIS_PUBLIC_API_BASE_URL=http://thingsvis-server:8000/api/v1"
+    - TZ=Asia/Shanghai
+    - GOTP_DB_PSQL_HOST=postgres
+    - GOTP_DB_PSQL_PORT=5432
+    - GOTP_DB_PSQL_USERNAME=postgres
+    - GOTP_DB_PSQL_PASSWORD=${TP_DATABASE_PASSWORD:-postgresThingsPanel}
+    - GOTP_DB_PSQL_DBNAME=ThingsPanel
+    - GOTP_DB_PSQL_LOG_LEVEL=3
+    - GOTP_DB_REDIS_ADDR=redis:6379
+    - GOTP_DB_REDIS_PASSWORD=redis
+    - GOTP_MQTT_SERVER=mosquitto
+    - GOTP_MQTT_ACCESS_ADDRESS=mosquitto:1883
+    - GOTP_MQTT_BROKER=mosquitto:1883
+    - GOTP_LOG_LEVEL=error
+    - GOTP_THINGSVIS_PUBLIC_API_BASE_URL=http://thingsvis-server:8000/api/v1
+    - GOTP_MQTT_INPUT_PROFILE=ingress_v1
+    - GOTP_MQTT_BROKER_CELL=${TP_BROKER_CELL:-community}
+    - GOTP_MQTT_BROKER_INSTANCE=${TP_BROKER_INSTANCE:-community-mosquitto}
+    - GOTP_MQTT_CLIENT_ID=${TP_MQTT_CLIENT_ID:-tp-community-backend}
+    - GOTP_MQTT_USER=${TP_MQTT_USER:?set in .env}
+    - GOTP_MQTT_PASS=${TP_MQTT_PASSWORD:?set in .env}
+    - GOTP_AUTOMATION_MODE=native
+    - GOTP_AUTOMATION_BASE_URL=http://encore-api:14000
+    - GOTP_AUTOMATION_TOKEN=${TP_AUTOMATION_TOKEN:?set in .env}
+    - GOTP_AUTOMATION_DEPLOYMENT_ID=${TP_DEPLOYMENT_ID:-community}
+    - TP_THINGMODEL_NATIVE_URL=http://encore-api:14000
+    - GOTP_JWT_KEY=${TP_JWT_KEY:?set in .env}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      gmqtt:
+      mosquitto:
         condition: service_started
     volumes:
-      - go_files:/go/src/app/files
-      - go_configs:/go/src/app/configs
+    - go_files:/go/src/app/files
+    - go_configs:/go/src/app/configs
     restart: unless-stopped
     networks:
-      - thingspanel_network
-
+    - thingspanel_network
   modbus_service:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/modbus-protocol-plugin:v1.0.6.1
     ports:
-      - "502:502"
-      - "503:503"
+    - 502:502
+    - 503:503
     environment:
-      - "MODBUS_THINGSPANEL_ADDRESS=http://backend:9999"
-      - "MODBUS_MQTT_BROKER=gmqtt:1883"
-      - "MODBUS_MQTT_QOS=0"
-      - "MODBUS_EXCEPTION_REPORT_ENABLED=true"
+    - MODBUS_THINGSPANEL_ADDRESS=http://backend:9999
+    - MODBUS_MQTT_BROKER=mosquitto:1883
+    - MODBUS_MQTT_QOS=0
+    - MODBUS_EXCEPTION_REPORT_ENABLED=true
     networks:
-      - thingspanel_network
+    - thingspanel_network
     depends_on:
-      - backend
-      - gmqtt
+    - backend
+    - mosquitto
     restart: unless-stopped
-
   http_adapter:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-adapter-http:v1.1.0
     ports:
-      - "19090:19090"
-      - "19091:19091"
+    - 19090:19090
+    - 19091:19091
     environment:
-      - "TZ=Asia/Shanghai"
-      - "P_SERVER_PORT=19090"
-      - "P_SERVER_HTTP_PORT=19091"
-      - "P_PLATFORM_URL=http://backend:9999"
-      - "P_PLATFORM_MQTT_BROKER=tcp://gmqtt:1883"
+    - TZ=Asia/Shanghai
+    - P_SERVER_PORT=19090
+    - P_SERVER_HTTP_PORT=19091
+    - P_PLATFORM_URL=http://backend:9999
+    - P_PLATFORM_MQTT_BROKER=tcp://mosquitto:1883
     networks:
-      - thingspanel_network
+    - thingspanel_network
     depends_on:
-      - backend
-      - gmqtt
+    - backend
+    - mosquitto
   thingsvis-server:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-server:v1.0.23
     container_name: thingsvis-server
     restart: unless-stopped
     ports:
-      - "8000:8000"
+    - 8000:8000
     environment:
-      - NODE_ENV=production
-      - HOSTNAME=0.0.0.0
-      - AUTH_TRUST_HOST=true
-      - DATABASE_URL=postgresql://postgres:postgresThingsPanel@postgres:5432/ThingsPanel?schema=thingsvis
-      - AUTH_SECRET=your-super-secret-auth-key
+    - NODE_ENV=production
+    - HOSTNAME=0.0.0.0
+    - AUTH_TRUST_HOST=true
+    - DATABASE_URL=postgresql://postgres:${TP_DATABASE_PASSWORD:-postgresThingsPanel}@postgres:5432/ThingsPanel?schema=thingsvis
+    - AUTH_SECRET=your-super-secret-auth-key
     depends_on:
       postgres:
         condition: service_healthy
     networks:
-      - thingspanel_network
+    - thingspanel_network
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- --spider http://127.0.0.1:8000/"]
+      test:
+      - CMD-SHELL
+      - wget -qO- --spider http://127.0.0.1:8000/
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 120s
-
   thingsvis-studio:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-studio:v1.0.23
     container_name: thingsvis-studio
     restart: unless-stopped
     ports:
-      - "3000:3000"
+    - 3000:3000
     environment:
-      - STUDIO_PORT=3000
-      - SERVER_HOST=thingsvis-server
-      - SERVER_PORT=8000
+    - STUDIO_PORT=3000
+    - SERVER_HOST=thingsvis-server
+    - SERVER_PORT=8000
     depends_on:
       thingsvis-server:
         condition: service_healthy
     networks:
-      - thingspanel_network
+    - thingspanel_network
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/ || exit 1"]
+      test:
+      - CMD-SHELL
+      - curl -sf http://127.0.0.1:3000/ || exit 1
       interval: 15s
       timeout: 5s
       retries: 10
       start_period: 60s
-
+  broker-owner:
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-mosquitto:v1.3.0
+    command:
+    - owner
+    restart: unless-stopped
+    networks:
+      thingspanel_network:
+        aliases:
+        - mosquitto
+    environment:
+      TP_BROKER_OWNER_LISTEN: 0.0.0.0:9801
+      TP_BROKER_OWNER_DATABASE_DSN: ${TP_BROKER_DATABASE_DSN:?set in .env}
+      TP_BROKER_OWNER_TOKENS_FILE: /run/secrets/owner-tokens.json
+      TP_BROKER_OWNER_SERVICES_FILE: /run/secrets/services.json
+    volumes:
+    - ./config/native/owner-tokens.json:/run/secrets/owner-tokens.json:ro
+    - ./config/native/services.json:/run/secrets/services.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+    - 1883:1883
+  mosquitto:
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-mosquitto:v1.3.0
+    command:
+    - broker
+    restart: unless-stopped
+    network_mode: service:broker-owner
+    depends_on:
+    - broker-owner
+    environment:
+      TP_BROKER_OWNER_URL: http://127.0.0.1:9801
+      TP_BROKER_TOKEN_FILE: /run/secrets/plugin-token
+      TP_BROKER_CELL: ${TP_BROKER_CELL:-community}
+      TP_BROKER_INSTANCE: ${TP_BROKER_INSTANCE:-community-mosquitto}
+    volumes:
+    - mosquitto_data:/mosquitto/data
+    - ./config/native/plugin-token:/run/secrets/plugin-token:ro
+    - ./config/native/services.json:/run/secrets/services.json:ro
+  encore-api:
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-encore:v1.3.0
+    restart: unless-stopped
+    networks:
+    - thingspanel_network
+    environment:
+      TP_AUTH_MODE: legacy-jwt
+      TP_JWT_KEY: ${TP_JWT_KEY:?set in .env}
+      TP_COMMUNITY_BASE_URL: http://backend:9999
+      TP_COMMUNITY_SESSION_BASE_URL: http://backend:9999
+      TP_AUTOMATION_SERVICE_TOKEN: ${TP_AUTOMATION_TOKEN:?set in .env}
+      TP_SOURCE_DEPLOYMENT_ID: ${TP_DEPLOYMENT_ID:-community}
+      DB_DEVICE_METADATA_PASSWORD: ${TP_NATIVE_DB_PASSWORD:?set in .env}
+      DB_AUTOMATION_PASSWORD: ${TP_NATIVE_DB_PASSWORD:?set in .env}
+      DB_NOTIFICATION_PASSWORD: ${TP_NATIVE_DB_PASSWORD:?set in .env}
+      PORT: '14000'
+      ENCORE_LISTEN_ADDR: 0.0.0.0:14000
+      ENCORE_INFRA_CONFIG_PATH: /run/config/runtime.json
+    volumes:
+    - ./config/native/runtime.encore.json:/run/config/runtime.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+  notification-core:
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-encore:v1.3.0
+    restart: unless-stopped
+    networks:
+    - thingspanel_network
+    environment:
+      TP_AUTH_MODE: legacy-jwt
+      TP_JWT_KEY: ${TP_JWT_KEY:?set in .env}
+      TP_COMMUNITY_BASE_URL: http://backend:9999
+      TP_COMMUNITY_SESSION_BASE_URL: http://backend:9999
+      TP_AUTOMATION_SERVICE_TOKEN: ${TP_AUTOMATION_TOKEN:?set in .env}
+      TP_SOURCE_DEPLOYMENT_ID: ${TP_DEPLOYMENT_ID:-community}
+      DB_DEVICE_METADATA_PASSWORD: ${TP_NATIVE_DB_PASSWORD:?set in .env}
+      DB_AUTOMATION_PASSWORD: ${TP_NATIVE_DB_PASSWORD:?set in .env}
+      DB_NOTIFICATION_PASSWORD: ${TP_NATIVE_DB_PASSWORD:?set in .env}
+      PORT: '18091'
+      ENCORE_LISTEN_ADDR: 0.0.0.0:18091
+      ENCORE_INFRA_CONFIG_PATH: /run/config/runtime.json
+      NOTIFICATION_ENCORE_INFRA_CONFIG_PATH: /run/config/runtime.json
+      NOTIFICATION_KEYRING_B64: ${TP_NOTIFICATION_KEYRING_B64:?set in .env}
+      NOTIFICATION_ACTIVE_KEY_REF: main
+    volumes:
+    - ./config/native/runtime.notification.json:/run/config/runtime.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+  automation-scheduler:
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.3.0
+    entrypoint:
+    - /bin/sh
+    - /run/config/tick.sh
+    restart: unless-stopped
+    environment:
+      TP_AUTOMATION_SERVICE_TOKEN: ${TP_AUTOMATION_TOKEN:?set in .env}
+      TP_SOURCE_DEPLOYMENT_ID: ${TP_DEPLOYMENT_ID:-community}
+    volumes:
+    - ./config/native/tick.sh:/run/config/tick.sh:ro
+    networks:
+    - thingspanel_network
+    depends_on:
+    - encore-api
 volumes:
-  go_files:
-  go_configs:
-  gmqtt:
-  nginx:
-  postgres_data:
-  redis_data:
-
+  go_files: null
+  go_configs: null
+  postgres_data: null
+  redis_data: null
+  mosquitto_data: null
 networks:
   thingspanel_network:
     driver: bridge

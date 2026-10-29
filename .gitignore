@@ -5,6 +5,9 @@
 # 环境变量（含密码，绝对不入库）
 .env
 *.env.local
+config/native/owner-tokens.json
+config/native/services.json
+config/native/plugin-token
 
 # 数据目录
 data/

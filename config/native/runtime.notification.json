@@ -1,0 +1,45 @@
+{
+  "metadata": {
+    "app_id": "thingspanel-community",
+    "env_name": "self-hosted",
+    "env_type": "production",
+    "cloud": "local",
+    "base_url": "http://notification-core:18091"
+  },
+  "hosted_services": [
+    "authn",
+    "notification"
+  ],
+  "hosted_gateways": [],
+  "sql_servers": [
+    {
+      "host": "postgres:5432",
+      "tls_config": {
+        "disable_tls": true
+      },
+      "databases": {
+        "device_metadata": {
+          "name": "device_metadata",
+          "username": "postgres",
+          "password": {
+            "$env": "DB_DEVICE_METADATA_PASSWORD"
+          }
+        },
+        "automation": {
+          "name": "automation",
+          "username": "postgres",
+          "password": {
+            "$env": "DB_AUTOMATION_PASSWORD"
+          }
+        },
+        "notification": {
+          "name": "notification",
+          "username": "postgres",
+          "password": {
+            "$env": "DB_NOTIFICATION_PASSWORD"
+          }
+        }
+      }
+    }
+  ]
+}

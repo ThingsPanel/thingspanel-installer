@@ -42,6 +42,13 @@ main() {
 
     step "更新配置文件"
     curl -fsSL "${RAW_BASE}/docker-compose.yml" -o "${INSTALL_DIR}/docker-compose.yml"
+    mkdir -p "${INSTALL_DIR}/config/native"
+    curl -fsSL "${RAW_BASE}/niginx.conf" -o "${INSTALL_DIR}/niginx.conf"
+    for native_file in prepare.py runtime.encore.json runtime.notification.json tick.sh README.md; do
+        curl -fsSL "${RAW_BASE}/config/native/${native_file}" -o "${INSTALL_DIR}/config/native/${native_file}"
+    done
+    command -v python3 >/dev/null 2>&1 || error "v1.3.0 原生配置准备需要 Python 3"
+    python3 "${INSTALL_DIR}/config/native/prepare.py"
     success "配置文件已更新"
 
     step "拉取新镜像"

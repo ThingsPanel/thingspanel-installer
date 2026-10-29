@@ -47,6 +47,13 @@ jobs:
           cat > .env << 'EOF'
           DATA_DIR=./data
           TZ=Asia/Shanghai
+          TP_BROKER_DATABASE_DSN=host=postgres user=postgres password=syntax-check dbname=ThingsPanel sslmode=disable
+          TP_JWT_KEY=syntax-check-only
+          TP_AUTOMATION_TOKEN=syntax-check-only
+          TP_MQTT_USER=syntax-check-only
+          TP_MQTT_PASSWORD=syntax-check-only
+          TP_NATIVE_DB_PASSWORD=syntax-check-only
+          TP_NOTIFICATION_KEYRING_B64=syntax-check-only
           EOF
 
       - name: Validate docker-compose syntax
@@ -59,6 +66,8 @@ jobs:
               --add-host backend:127.0.0.1 \
               --add-host thingsvis-server:127.0.0.1 \
               --add-host thingsvis-studio:127.0.0.1 \
+              --add-host encore-api:127.0.0.1 \
+              --add-host notification-core:127.0.0.1 \
               -v "$PWD/niginx.conf:/etc/nginx/nginx.conf:ro" \
               nginx:alpine nginx -t
           fi

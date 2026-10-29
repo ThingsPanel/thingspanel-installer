@@ -221,6 +221,13 @@ download_docker_compose() {
     local compose_url="${RAW_BASE}/docker-compose.yml"
 
     download_file "$compose_url" "${INSTALL_DIR}/docker-compose.yml" "0644"
+    mkdir -p "${INSTALL_DIR}/config/native"
+    download_file "${RAW_BASE}/niginx.conf" "${INSTALL_DIR}/niginx.conf" "0644"
+    for native_file in prepare.py runtime.encore.json runtime.notification.json tick.sh README.md; do
+        download_file "${RAW_BASE}/config/native/${native_file}" "${INSTALL_DIR}/config/native/${native_file}" "0644"
+    done
+    command_exists python3 || error "v1.3.0 原生配置准备需要 Python 3，请安装后重试"
+    python3 "${INSTALL_DIR}/config/native/prepare.py"
     success "配置文件已下载到 $INSTALL_DIR"
 }
 

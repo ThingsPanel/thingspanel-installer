@@ -8,6 +8,10 @@
 
 ---
 
+## v1.3.0 部署配置
+
+直接使用本仓库 `docker-compose.yml`。已加入 Encore 并将 GMQTT 替换为 Mosquitto；凭据、资源数据库迁移及当前平台下发允许列表要求见 [原生服务配置](config/native/README.md)。这是 Compose 接线更新，尚未完成全新环境一键安装验收，升级前需准备所列数据库迁移。
+
 ## 快速安装
 
 ### Linux / macOS
@@ -52,7 +56,9 @@ curl -fsSL https://install.thingspanel.io/install.sh | sh
 | **backend** | ThingsPanel Go 后端 API | 内部 |
 | **postgres** | TimescaleDB 时序数据库 | 内部 |
 | **redis** | 缓存 | 内部 |
-| **gmqtt** | MQTT Broker | 内部 |
+| **mosquitto / broker-owner** | MQTT Broker 与现有设备认证 | 1883 |
+| **encore-api / notification-core** | 原生物模型、自动化与通知 | 内部 |
+| **automation-scheduler** | 原生定时唤醒 | 内部 |
 | **modbus** | Modbus 协议插件 | 502/503 |
 | **http-adapter** | HTTP 协议适配器 | 内部 |
 | **thingsvis-server** | ThingsVis 大屏服务端 | 内部 |

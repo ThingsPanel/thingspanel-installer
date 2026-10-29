@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import socket
 import subprocess
 import hashlib
 import re
@@ -200,6 +201,8 @@ def verify():
             rows = [json.loads(line) for line in command('docker', 'compose', 'ps', '--all', '--format', 'json').splitlines()]
             if len(rows) == 1 and isinstance(rows[0], list): rows = rows[0]
             if any(row.get('State') != 'running' for row in rows): raise RuntimeError('Container not running')
+            for port in (19091, 503):
+                with socket.create_connection(('127.0.0.1', port), timeout=2): pass
             command('docker', 'compose', 'exec', '-T', 'automation-scheduler', 'test', '-f', '/tmp/last-tick-ok')
             print('Web API, native API, notification auth and scheduler are ready.')
             return

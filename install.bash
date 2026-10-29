@@ -245,13 +245,7 @@ start_services() {
         success "离线镜像分片已加载"
     else
         info "拉取镜像（首次可能需要 3-5 分钟，取决于网速）..."
-        local pull_attempt=1
-        until docker compose pull --quiet; do
-            [ "$pull_attempt" -lt 3 ] || error "镜像拉取失败，请检查网络或仓库鉴权"
-            warn "镜像拉取连接中断，重试 $pull_attempt/3"
-            pull_attempt=$((pull_attempt + 1))
-            sleep 3
-        done
+        python3 "${INSTALL_DIR}/config/native/prepare.py" --pull
     fi
 
     info "准备数据库和服务配置..."

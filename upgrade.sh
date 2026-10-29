@@ -53,7 +53,7 @@ main() {
 
     step "拉取新镜像"
     cd "$INSTALL_DIR"
-    docker compose pull --quiet
+    python3 "${INSTALL_DIR}/config/native/prepare.py" --pull
     success "镜像拉取完成"
 
     step "准备数据库和服务配置"

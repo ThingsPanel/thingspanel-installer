@@ -142,6 +142,19 @@ def bootstrap():
     print('Community, Broker and native database migrations are ready.')
 
 
+def pull_images():
+    config = json.loads(command('docker', 'compose', 'config', '--format', 'json'))
+    images = dict.fromkeys(service['image'] for service in config['services'].values())
+    for image in images:
+        print('Pulling ' + image, flush=True)
+        for attempt in range(3):
+            result = subprocess.run(['docker', 'pull', image], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if result.returncode == 0: break
+            if attempt == 2: raise RuntimeError('Image pull failed after 3 attempts: ' + image)
+            print('Registry connection failed; retrying the same image (' + str(attempt + 1) + '/3)', flush=True)
+            time.sleep(3)
+
+
 def apply_migrations(database, component, paths):
     sql(database, 'CREATE TABLE IF NOT EXISTS installer_migrations(component text NOT NULL,version int NOT NULL,checksum text NOT NULL,PRIMARY KEY(component,version))')
     for path in paths:
@@ -190,8 +203,10 @@ if __name__ == '__main__':
     parser.add_argument('--refresh-devices', action='store_true')
     parser.add_argument('--bootstrap', action='store_true')
     parser.add_argument('--verify', action='store_true')
+    parser.add_argument('--pull', action='store_true')
     args = parser.parse_args()
     env = configure()
+    if args.pull: pull_images()
     if args.bootstrap: bootstrap()
     if args.refresh_devices: refresh(env)
     if args.verify: verify()

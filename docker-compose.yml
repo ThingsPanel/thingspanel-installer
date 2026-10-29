@@ -2,19 +2,21 @@ services:
   frontend:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-vue:v1.3.0
     ports:
-    - 8080:8080
+    - ${HTTP_PORT:-8080}:8080
     environment:
     - TZ=Asia/Shanghai
     - BACKEND_HOST=http://backend:9999
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
       encore-api:
         condition: service_started
       notification-core:
         condition: service_started
     volumes:
     - ./niginx.conf:/etc/nginx/nginx.conf:ro
+    - ./config/native/internal.crt:/run/config/internal.crt:ro
+    - ./config/native/internal.key:/run/config/internal.key:ro
     restart: unless-stopped
     networks:
     - thingspanel_network
@@ -55,6 +57,8 @@ services:
       test:
       - CMD
       - redis-cli
+      - -a
+      - redis
       - ping
       interval: 10s
       timeout: 5s
@@ -106,6 +110,14 @@ services:
     restart: unless-stopped
     networks:
     - thingspanel_network
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - wget -qO- http://127.0.0.1:9999/health >/dev/null
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 30s
   modbus_service:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/modbus-protocol-plugin:v1.0.6.1
     ports:
@@ -196,7 +208,7 @@ services:
         aliases:
         - mosquitto
     environment:
-      TP_BROKER_OWNER_LISTEN: 0.0.0.0:9801
+      TP_BROKER_OWNER_LISTEN: 127.0.0.1:9801
       TP_BROKER_OWNER_DATABASE_DSN: ${TP_BROKER_DATABASE_DSN:?set in .env}
       TP_BROKER_OWNER_TOKENS_FILE: /run/secrets/owner-tokens.json
       TP_BROKER_OWNER_SERVICES_FILE: /run/secrets/services.json
@@ -207,7 +219,15 @@ services:
       postgres:
         condition: service_healthy
     ports:
-    - 1883:1883
+    - ${MQTT_PORT:-1883}:1883
+    healthcheck:
+      test:
+      - CMD
+      - /usr/local/bin/tp-broker-readiness
+      - owner-liveness
+      interval: 5s
+      timeout: 3s
+      retries: 12
   mosquitto:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-mosquitto:v1.3.0
     command:
@@ -215,7 +235,8 @@ services:
     restart: unless-stopped
     network_mode: service:broker-owner
     depends_on:
-    - broker-owner
+      broker-owner:
+        condition: service_healthy
     environment:
       TP_BROKER_OWNER_URL: http://127.0.0.1:9801
       TP_BROKER_TOKEN_FILE: /run/secrets/plugin-token
@@ -269,8 +290,11 @@ services:
       NOTIFICATION_ENCORE_INFRA_CONFIG_PATH: /run/config/runtime.json
       NOTIFICATION_KEYRING_B64: ${TP_NOTIFICATION_KEYRING_B64:?set in .env}
       NOTIFICATION_ACTIVE_KEY_REF: main
+      NOTIFICATION_LEGACY_BASE_URL: https://frontend:8443
+      SSL_CERT_FILE: /run/config/internal-ca.pem
     volumes:
     - ./config/native/runtime.notification.json:/run/config/runtime.json:ro
+    - ./config/native/internal-ca.pem:/run/config/internal-ca.pem:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -289,6 +313,16 @@ services:
     - thingspanel_network
     depends_on:
     - encore-api
+    healthcheck:
+      test:
+      - CMD
+      - test
+      - -f
+      - /tmp/last-tick-ok
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 30s
 volumes:
   go_files: null
   go_configs: null

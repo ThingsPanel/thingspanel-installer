@@ -258,8 +258,11 @@ start_services() {
         docker compose pull --quiet
     fi
 
+    info "准备数据库和服务配置..."
+    python3 "${INSTALL_DIR}/config/native/prepare.py" --bootstrap --refresh-devices
+
     info "启动服务，等待健康检查通过..."
-    if ! docker compose up -d --wait --timeout 180 2>&1; then
+    if ! docker compose up -d --wait --wait-timeout 240 2>&1; then
         error "启动失败，请运行以下命令查看日志：\n  docker compose -f ${INSTALL_DIR}/docker-compose.yml logs"
     fi
     success "所有服务已启动"
@@ -268,28 +271,8 @@ start_services() {
 # ── 验证安装 ──────────────────────────────────────────────────────────────────
 verify_installation() {
     step "验证安装"
-    local max_wait=60
-    local waited=0
+    python3 "${INSTALL_DIR}/config/native/prepare.py" --verify
 
-    info "等待 Web 服务就绪..."
-    while [ "$waited" -lt "$max_wait" ]; do
-        if command_exists curl; then
-            if curl -sf "http://localhost:${HTTP_PORT}/health" >/dev/null 2>&1; then
-                success "Web 服务已就绪 (http://localhost:${HTTP_PORT})"
-                return
-            fi
-        elif command_exists wget; then
-            if wget -qO- "http://localhost:${HTTP_PORT}/health" >/dev/null 2>&1; then
-                success "Web 服务已就绪"
-                return
-            fi
-        fi
-        sleep 2
-        waited=$(( waited + 2 ))
-        echo -n "."
-    done
-    echo ""
-    warn "Web 服务尚未响应，但容器已在后台运行。请稍后访问 http://localhost:${HTTP_PORT}"
 }
 
 # ── 安装完成提示 ───────────────────────────────────────────────────────────────

@@ -56,8 +56,12 @@ main() {
     docker compose pull --quiet
     success "镜像拉取完成"
 
+    step "准备数据库和服务配置"
+    python3 "${INSTALL_DIR}/config/native/prepare.py" --bootstrap --refresh-devices
+
     step "重启服务"
-    docker compose up -d --wait --timeout 180
+    docker compose up -d --wait --wait-timeout 240
+    python3 "${INSTALL_DIR}/config/native/prepare.py" --verify
     success "升级完成！当前版本: $TARGET_VERSION"
 
     echo ""

@@ -11,5 +11,6 @@ while :; do
     echo 'Automation scheduler request failed' >&2
     exit 1
   fi
+  touch /tmp/last-tick-ok
   sleep 5
 done

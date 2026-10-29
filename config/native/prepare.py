@@ -6,6 +6,12 @@ import os
 from pathlib import Path
 import secrets
 import subprocess
+import hashlib
+import re
+import tempfile
+import time
+import urllib.request
+import urllib.error
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / 'config/native'
@@ -61,6 +67,15 @@ def configure():
     # An empty initial scope only subscribes; it cannot issue unscoped commands.
     if not (CONFIG / 'services.json').exists():
         save('services.json', [service(current, [])], True)
+    certificate = CONFIG / 'internal.crt'
+    if not certificate.exists():
+        command('openssl', 'req', '-x509', '-nodes', '-newkey', 'rsa:2048', '-days', '3650',
+                '-subj', '/CN=frontend', '-addext', 'subjectAltName=DNS:frontend',
+                '-keyout', str(CONFIG / 'internal.key'), '-out', str(certificate))
+        (CONFIG / 'internal.key').chmod(0o600)
+    system_ca = Path('/etc/ssl/certs/ca-certificates.crt')
+    bundle = (system_ca.read_bytes() if system_ca.exists() else b'') + b'\n' + certificate.read_bytes()
+    (CONFIG / 'internal-ca.pem').write_bytes(bundle)
     return current
 
 
@@ -83,10 +98,97 @@ def refresh(env):
     print('MQTT command allowlist refreshed for ' + str(len(targets)) + ' devices; restart broker-owner and mosquitto to load it.')
 
 
+def bootstrap():
+    """Apply SQL shipped in the selected backend image; never reinitialize data."""
+    command('docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '120', 'postgres', 'redis')
+    with tempfile.TemporaryDirectory(prefix='tp-installer-') as temp:
+        stage = Path(temp)
+        image = command('docker', 'compose', 'config', '--format', 'json')
+        image = json.loads(image)['services']['backend']['image']
+        container = command('docker', 'create', '--entrypoint', '/bin/true', image)
+        try:
+            for source, target in [('sql', 'community'), ('encore-api/automation/migrations', 'automation'),
+                                   ('encore-api/devicemetadata/migrations', 'device_metadata'),
+                                   ('encore-api/l3-core/notification/migrations', 'notification'), ('pkg/global/global.go', 'global.go')]:
+                command('docker', 'cp', container + ':/go/src/app/' + source, str(stage / target))
+        finally:
+            command('docker', 'rm', container)
+        target_version = int(re.search(r'VERSION_NUMBER\s*=\s*(\d+)', (stage / 'global.go').read_text()).group(1))
+        # Match the application's own sys_version protocol; 1.sql only runs on a new database.
+        sql('ThingsPanel', "CREATE TABLE IF NOT EXISTS sys_version(version_number INT NOT NULL DEFAULT 0 PRIMARY KEY,version varchar(255) NOT NULL); INSERT INTO sys_version SELECT 0,'0.0.0' WHERE NOT EXISTS(SELECT 1 FROM sys_version);")
+        current = int(sql('ThingsPanel', 'SELECT version_number FROM sys_version'))
+        if current > target_version: raise RuntimeError('Installed database is newer than selected backend image')
+        for number in range(current + 1, target_version + 1):
+            content = (stage / 'community' / (str(number) + '.sql')).read_text()
+            sql('ThingsPanel', "BEGIN; SET LOCAL lock_timeout='30s';\n" + content + "\nUPDATE sys_version SET version_number=" + str(number) + ",version='v1.3.0'; COMMIT;")
+        apply_migrations('ThingsPanel', 'broker', sorted((stage / 'community/broker').glob('[0-9]*.sql'), key=lambda p: int(p.name.split('_')[0])))
+        for database in ['device_metadata', 'automation', 'notification']:
+            if sql('postgres', "SELECT count(*) FROM pg_database WHERE datname='" + database + "'") == '0':
+                sql('postgres', 'CREATE DATABASE "' + database + '"')
+            sql(database, 'CREATE EXTENSION IF NOT EXISTS pgcrypto')
+            paths = sorted((stage / database).glob('*.up.sql'), key=lambda p: int(p.name.split('_')[0]))
+            if sql(database, "SELECT to_regclass('public.schema_migrations') IS NOT NULL") == 't':
+                if sql(database, 'SELECT count(*) FROM schema_migrations WHERE dirty=true') != '0':
+                    raise RuntimeError('Native database has an unfinished migration: ' + database)
+                installed = int(sql(database, 'SELECT coalesce(max(version),0) FROM schema_migrations'))
+                if installed > max(int(p.name.split('_')[0]) for p in paths):
+                    raise RuntimeError('Native database is newer than selected image: ' + database)
+            apply_migrations(database, database, paths)
+            sql(database, 'CREATE TABLE IF NOT EXISTS schema_migrations(version bigint PRIMARY KEY,dirty boolean NOT NULL); DELETE FROM schema_migrations; INSERT INTO schema_migrations VALUES(' + str(max(int(p.name.split('_')[0]) for p in paths)) + ',false);')
+    print('Community, Broker and native database migrations are ready.')
+
+
+def apply_migrations(database, component, paths):
+    sql(database, 'CREATE TABLE IF NOT EXISTS installer_migrations(component text NOT NULL,version int NOT NULL,checksum text NOT NULL,PRIMARY KEY(component,version))')
+    for path in paths:
+        number = int(path.name.split('_')[0])
+        content = path.read_text().replace('\r\n', '\n')
+        checksum = hashlib.sha256(content.encode()).hexdigest()
+        recorded = sql(database, "SELECT checksum FROM installer_migrations WHERE component='" + component + "' AND version=" + str(number))
+        if recorded:
+            if recorded != checksum: raise RuntimeError('Migration checksum mismatch: ' + component + '/' + path.name)
+            continue
+        # A pre-existing native database without this installer's ledger needs its native version respected.
+        if component != 'broker' and sql(database, "SELECT to_regclass('public.schema_migrations') IS NOT NULL") == 't':
+            native_version = sql(database, 'SELECT coalesce(max(version),0) FROM schema_migrations WHERE dirty=false')
+            if int(native_version) >= number:
+                sql(database, "INSERT INTO installer_migrations VALUES('" + component + "'," + str(number) + ",'" + checksum + "')")
+                continue
+        sql(database, "BEGIN; SET LOCAL lock_timeout='30s';\n" + content + "\nINSERT INTO installer_migrations VALUES('" + component + "'," + str(number) + ",'" + checksum + "'); COMMIT;")
+
+
+def verify():
+    endpoints = [('/api/v1/sys_version', 200), ('/automation-core/v1/health', 200), ('/api/v2/notification-groups', 401)]
+    for attempt in range(60):
+        try:
+            for path, expected in endpoints:
+                try:
+                    with urllib.request.urlopen('http://127.0.0.1:' + os.getenv('HTTP_PORT', '8080') + path, timeout=4) as response:
+                        status = response.status
+                        json.load(response)
+                except urllib.error.HTTPError as error:
+                    status = error.code
+                    json.loads(error.read())
+                if status != expected: raise RuntimeError('Endpoint not ready')
+            rows = [json.loads(line) for line in command('docker', 'compose', 'ps', '--all', '--format', 'json').splitlines()]
+            if len(rows) == 1 and isinstance(rows[0], list): rows = rows[0]
+            if any(row.get('State') != 'running' for row in rows): raise RuntimeError('Container not running')
+            command('docker', 'compose', 'exec', '-T', 'automation-scheduler', 'test', '-f', '/tmp/last-tick-ok')
+            print('Web API, native API, notification auth and scheduler are ready.')
+            return
+        except (RuntimeError, ValueError, OSError):
+            time.sleep(2)
+    raise RuntimeError('Installation verification failed; inspect docker compose logs')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--refresh-devices', action='store_true')
+    parser.add_argument('--bootstrap', action='store_true')
+    parser.add_argument('--verify', action='store_true')
     args = parser.parse_args()
     env = configure()
+    if args.bootstrap: bootstrap()
     if args.refresh_devices: refresh(env)
+    if args.verify: verify()
     print('Native service configuration prepared. Credentials remain in local .env and config/native/.')

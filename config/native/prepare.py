@@ -23,7 +23,9 @@ CLIENT = 'tp-community-backend'
 def command(*args, data=None):
     result = subprocess.run(args, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=ROOT)
     if result.returncode:
-        raise RuntimeError('Native preparation command failed: ' + ' '.join(args[:4]))
+        errors = result.stderr.decode(errors='replace').splitlines()
+        detail = next((line for line in errors if 'ERROR:' in line or 'FATAL:' in line), '')
+        raise RuntimeError('Native preparation command failed: ' + ' '.join(args[:4]) + ('; ' + detail if detail else ''))
     return result.stdout.decode().strip()
 
 

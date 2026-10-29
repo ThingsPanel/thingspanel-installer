@@ -33,4 +33,4 @@ if ! command -v bash >/dev/null 2>&1; then
   exit 1
 fi
 
-fetch_and_exec "$URL1" || fetch_and_exec "$URL2"
+fetch_and_exec "$URL1"

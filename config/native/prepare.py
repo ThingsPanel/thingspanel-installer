@@ -51,6 +51,7 @@ def configure():
                 'TP_BROKER_DATABASE_DSN': 'host=postgres user=postgres password=' + current.get('TP_DATABASE_PASSWORD', 'postgresThingsPanel') + ' dbname=ThingsPanel port=5432 sslmode=disable',
                 'TP_JWT_KEY': secrets.token_hex(32), 'TP_AUTOMATION_TOKEN': secrets.token_hex(32),
                 'TP_MQTT_USER': 'tp-community-platform', 'TP_MQTT_PASSWORD': secrets.token_hex(32),
+                'TP_PROTOCOL_MQTT_USER': 'tp-community-protocols', 'TP_PROTOCOL_MQTT_PASSWORD': secrets.token_hex(32),
                 'TP_DEPLOYMENT_ID': 'community', 'TP_BROKER_CELL': CELL, 'TP_BROKER_INSTANCE': INSTANCE, 'TP_MQTT_CLIENT_ID': CLIENT,
                 'TP_NOTIFICATION_KEYRING_B64': base64.b64encode(json.dumps({'main': base64.b64encode(secrets.token_bytes(32)).decode()}).encode()).decode()}
     with envfile.open('a', encoding='utf-8') as output:
@@ -96,7 +97,16 @@ def service(env, targets):
 def refresh(env):
     targets = json.loads(sql('ThingsPanel', "SELECT coalesce(json_agg(t),'[]') FROM (SELECT d.id,d.tenant_id FROM devices d LEFT JOIN device_configs c ON c.id=d.device_config_id AND c.tenant_id=d.tenant_id WHERE d.is_enabled='enabled' AND d.activate_flag='active' AND (d.parent_id IS NULL OR d.parent_id='') AND (d.service_access_id IS NULL OR d.service_access_id='') AND coalesce(d.access_way,'A')<>'B' AND coalesce(c.protocol_type,'MQTT') IN ('MQTT','') ORDER BY d.id)t;"))
     if len(targets) > 256: raise RuntimeError('Broker service target scope exceeds 256; provision separate reviewed service identities')
-    save('services.json', [service(env, targets)], True)
+    plugins = json.loads(sql('ThingsPanel', "SELECT coalesce(json_agg(t),'[]') FROM (SELECT d.id,d.tenant_id FROM devices d LEFT JOIN device_configs c ON c.id=d.device_config_id AND c.tenant_id=d.tenant_id WHERE d.is_enabled='enabled' AND d.activate_flag='active' AND ((d.service_access_id IS NOT NULL AND d.service_access_id<>'') OR (c.protocol_type IS NOT NULL AND c.protocol_type NOT IN ('MQTT',''))) ORDER BY d.id)t;"))
+    if len(plugins) > 256: raise RuntimeError('Protocol plugin scope exceeds 256 devices')
+    plugin = service(env, [])
+    plugin.update(username=env['TP_PROTOCOL_MQTT_USER'], password=env['TP_PROTOCOL_MQTT_PASSWORD'],
+                  allowed_client_ids=[], allow_any_client_id=True, plugin_socket=True,
+                  allowed_device_ids=[item['id'] for item in plugins],
+                  allowed_tenant_ids=sorted({item['tenant_id'] for item in plugins}))
+    plugin['principal']['device_id'] = 'community-protocols'
+    plugin['policy']['subscribe'] = []
+    save('services.json', [service(env, targets), plugin], True)
     print('MQTT command allowlist refreshed for ' + str(len(targets)) + ' devices; restart broker-owner and mosquitto to load it.')
 
 

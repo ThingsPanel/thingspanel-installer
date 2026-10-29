@@ -126,6 +126,8 @@ services:
     environment:
     - MODBUS_THINGSPANEL_ADDRESS=http://backend:9999
     - MODBUS_MQTT_BROKER=mosquitto:1883
+    - MODBUS_MQTT_USERNAME=${TP_PROTOCOL_MQTT_USER:?set in .env}
+    - MODBUS_MQTT_PASSWORD=${TP_PROTOCOL_MQTT_PASSWORD:?set in .env}
     - MODBUS_MQTT_QOS=0
     - MODBUS_EXCEPTION_REPORT_ENABLED=true
     networks:
@@ -145,11 +147,14 @@ services:
     - P_SERVER_HTTP_PORT=19091
     - P_PLATFORM_URL=http://backend:9999
     - P_PLATFORM_MQTT_BROKER=tcp://mosquitto:1883
+    - P_PLATFORM_MQTT_USERNAME=${TP_PROTOCOL_MQTT_USER:?set in .env}
+    - P_PLATFORM_MQTT_PASSWORD=${TP_PROTOCOL_MQTT_PASSWORD:?set in .env}
     networks:
     - thingspanel_network
     depends_on:
     - backend
     - mosquitto
+    restart: unless-stopped
   thingsvis-server:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-server:v1.0.23
     container_name: thingsvis-server

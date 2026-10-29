@@ -116,6 +116,8 @@ def bootstrap():
         finally:
             command('docker', 'rm', container)
         target_version = int(re.search(r'VERSION_NUMBER\s*=\s*(\d+)', (stage / 'global.go').read_text()).group(1))
+        # CasbinInit runs before CheckVersion in the backend and creates this adapter table.
+        sql('ThingsPanel', 'CREATE TABLE IF NOT EXISTS casbin_rule(id bigserial PRIMARY KEY,ptype varchar(100),v0 varchar(100),v1 varchar(100),v2 varchar(100),v3 varchar(100),v4 varchar(100),v5 varchar(100));')
         # Match the application's own sys_version protocol; 1.sql only runs on a new database.
         sql('ThingsPanel', "CREATE TABLE IF NOT EXISTS sys_version(version_number INT NOT NULL DEFAULT 0 PRIMARY KEY,version varchar(255) NOT NULL); INSERT INTO sys_version SELECT 0,'0.0.0' WHERE NOT EXISTS(SELECT 1 FROM sys_version);")
         current = int(sql('ThingsPanel', 'SELECT version_number FROM sys_version'))

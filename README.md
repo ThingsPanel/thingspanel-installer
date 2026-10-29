@@ -10,7 +10,7 @@
 
 ## v1.3.0 部署配置
 
-直接使用本仓库 `docker-compose.yml`。已加入 Encore 并将 GMQTT 替换为 Mosquitto；凭据、资源数据库迁移及当前平台下发允许列表要求见 [原生服务配置](config/native/README.md)。这是 Compose 接线更新，尚未完成全新环境一键安装验收，升级前需准备所列数据库迁移。
+直接使用下面的一行命令。安装器自动准备凭据、数据库迁移和 Encore/Mosquitto 服务，检查实际接口后再报告成功。部署与维护见 [一键安装说明](config/native/README.md)。
 
 ## 快速安装
 

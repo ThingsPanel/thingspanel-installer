@@ -1,13 +1,34 @@
-# v1.3.0 原生服务配置
+# v1.3.0 一键安装
 
-本目录配合仓库根 docker-compose.yml；不再使用另一套 Linux 发布包。Encore/通知核心使用 `thingspanel-encore:v1.3.0`，Mosquitto/Owner 使用已有认证插件生产镜像 `thingspanel-mosquitto:v1.3.0`，均由组件仓库发布到阿里云。
+Linux 服务器准备好 Docker Compose v2、Python 3 和 OpenSSL 后，执行原来的命令：
 
-部署前在安装目录以管理员执行 `python3 config/native/prepare.py`，生成本机独立凭据，不导入测试服令牌。已有 `.env` 值保留；数据库密码须与已有 PostgreSQL 一致，`TP_NATIVE_DB_PASSWORD` 也须与运行配置中的数据库用户一致。本示例沿用现有 postgres 用户。绑定文件需允许容器 UID 1883 读取。
+```sh
+curl -fsSL https://install.thingspanel.io/install.sh | sh
+```
 
-数据库先沿现有迁移台账准备：社区库应用 v1.3.0 社区/Broker 迁移；另建 device_metadata、automation、notification 三个库，分别应用后端标签 v1.3.0 中对应 migrations。自托管 Encore 镜像不会替你自动执行 SQL。不要在已有库重跑 sql/1.sql。初始化和迁移完成前不要把 compose 配置检查当成服务可用。
+完成后访问 `http://服务器地址:8080`。安装目录默认 `/opt/thingspanel`，不需要手工生成凭据、建库、执行 SQL 或分批启动服务。
 
-`runtime.encore.json` 启动 authn/thingmodel/automation，`runtime.notification.json` 启动 authn/notification；数据库地址为同一 Compose 的 postgres:5432。定时服务每 5 秒调用内部 tick。
+脚本自动下载本仓库 Compose 和配置，逐个拉取镜像，为本机生成持久凭据及内部 TLS 证书，启动 PostgreSQL/Redis，执行镜像携带的尚未执行迁移，再启动服务并检查实际 API、通知认证和定时唤醒。失败会退出，不会重新运行整套安装器或改用其他镜像名。
 
-现有 MQTT 实现要求平台下发具有明确设备范围；创建/导入设备后执行 `python3 config/native/prepare.py --refresh-devices`，再执行 `docker compose restart broker-owner mosquitto backend` 加载允许列表。空列表仅允许接收上报，不允许任意设备下发；超过 256 个目标需单独规划服务身份。这是当前 Broker 实现的边界，本次不改其鉴权逻辑。协议插件的服务身份也需在 services.json 中显式登记，不能把原 GMQTT 服务登录当成已兼容。
+社区数据库按 `sys_version` 升级；Broker 迁移及 `device_metadata`、`automation`、`notification` 三个资源库按迁移记录执行。自托管 Encore 镜像不自动执行 SQL，由安装脚本完成。重复安装保留 `.env`、数据和迁移记录；已有库密码必须与 `.env` 一致。凭据只保存在本机，不提交仓库。
 
-通知源授权、投影、SMTP 插件及持续续期仍沿已有流程配置，不因启动容器自动获得授权。TLS 入口由现有网关配置；此 Compose 的 Mosquitto 只开放 TCP 1883，不再将旧 GMQTT 的 8082/8083 当作 Mosquitto 端口。
+Encore/通知核心共用 `thingspanel-encore:v1.3.0`；Mosquitto/Owner 共用 `thingspanel-mosquitto:v1.3.0`，分别运行不同进程。后端镜像也被定时唤醒进程复用。所有镜像由组件仓库的发布 Action 上传阿里云，安装器负责拉取与启动。
+
+通知未配置插件时可管理通知页面，外发全部拒绝；实际发送仍需配置通知渠道和 SMTP。内部 TLS 的 8443 端口不对宿主机开放。MQTT 默认是 TCP 1883，不提供旧 GMQTT 的 WebSocket 端口。
+
+HTTP/Modbus 使用安装时生成的独立协议服务账号。新装没有设备时只允许建立连接，不获得任何发布或订阅权限。平台命令和协议插件的数据访问仍限于明确登记的设备；创建或导入设备后，维护人员在安装目录执行：
+
+```sh
+python3 config/native/prepare.py --refresh-devices
+docker compose restart broker-owner mosquitto backend http_adapter modbus_service
+```
+
+单个服务允许列表最多 256 个设备；超出需规划独立服务身份。以上是当前 Broker 的设备范围管理要求，不是安装步骤。
+
+查看运行状态和错误：
+
+```sh
+cd /opt/thingspanel
+docker compose ps
+docker compose logs --tail=100
+```

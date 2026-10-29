@@ -190,22 +190,12 @@ check_memory() {
 # ── 确定版本 ──────────────────────────────────────────────────────────────────
 resolve_version() {
     step "确定安装版本"
-    if [ -n "${TP_VERSION:-}" ]; then
-        VERSION="$TP_VERSION"
-        info "使用指定版本: $VERSION"
-    else
-        if command_exists curl; then
-            VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-                | grep '"tag_name"' | head -1 \
-                | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/' || true)
-        fi
-        VERSION="${VERSION:-v1.2.12.1}"
-        if [ -z "$VERSION" ]; then
-            VERSION="v1.2.12.1"
-        fi
-        info "最新版本: $VERSION"
+    VERSION=$(python3 -c 'import json,subprocess; c=json.loads(subprocess.check_output(["docker","compose","-f",__import__("sys").argv[1],"config","--format","json"])); print(c["services"]["backend"]["image"].rsplit(":",1)[1])' "${INSTALL_DIR}/docker-compose.yml")
+    if [ -n "${TP_VERSION:-}" ] && [ "$TP_VERSION" != "$VERSION" ]; then
+        error "指定版本与当前部署配置不一致：$TP_VERSION / $VERSION"
     fi
     success "将安装版本: $VERSION"
+
 }
 
 # ── 创建目录结构 ───────────────────────────────────────────────────────────────
@@ -255,7 +245,13 @@ start_services() {
         success "离线镜像分片已加载"
     else
         info "拉取镜像（首次可能需要 3-5 分钟，取决于网速）..."
-        docker compose pull --quiet
+        local pull_attempt=1
+        until docker compose pull --quiet; do
+            [ "$pull_attempt" -lt 3 ] || error "镜像拉取失败，请检查网络或仓库鉴权"
+            warn "镜像拉取连接中断，重试 $pull_attempt/3"
+            pull_attempt=$((pull_attempt + 1))
+            sleep 3
+        done
     fi
 
     info "准备数据库和服务配置..."
@@ -302,10 +298,10 @@ main() {
     check_docker
     check_ports
     check_memory
-    resolve_version
     ensure_install_dir_access
     setup_directories
     download_docker_compose
+    resolve_version
     download_management_scripts
     start_services
     verify_installation

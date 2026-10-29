@@ -9,10 +9,19 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+        restart: true
       encore-api:
         condition: service_started
+        restart: true
       notification-core:
         condition: service_started
+        restart: true
+      thingsvis-server:
+        condition: service_started
+        restart: true
+      thingsvis-studio:
+        condition: service_started
+        restart: true
     volumes:
     - ./niginx.conf:/etc/nginx/nginx.conf:ro
     - ./config/native/internal.crt:/run/config/internal.crt:ro

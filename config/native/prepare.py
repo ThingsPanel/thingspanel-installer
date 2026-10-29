@@ -187,15 +187,18 @@ def apply_migrations(database, component, paths):
 
 def verify():
     endpoints = [('/api/v1/sys_version', 200), ('/automation-core/v1/health', 200), ('/api/v2/notification-groups', 401)]
+    last_error = ''
     for attempt in range(60):
         try:
             for path, expected in endpoints:
                 try:
                     with urllib.request.urlopen('http://127.0.0.1:' + os.getenv('HTTP_PORT', '8080') + path, timeout=4) as response:
                         status = response.status
+                        if status != expected: raise RuntimeError(path + ': HTTP ' + str(status))
                         json.load(response)
                 except urllib.error.HTTPError as error:
                     status = error.code
+                    if status != expected: raise RuntimeError(path + ': HTTP ' + str(status))
                     json.loads(error.read())
                 if status != expected: raise RuntimeError('Endpoint not ready')
             rows = [json.loads(line) for line in command('docker', 'compose', 'ps', '--all', '--format', 'json').splitlines()]
@@ -206,9 +209,10 @@ def verify():
             command('docker', 'compose', 'exec', '-T', 'automation-scheduler', 'test', '-f', '/tmp/last-tick-ok')
             print('Web API, native API, notification auth and scheduler are ready.')
             return
-        except (RuntimeError, ValueError, OSError):
+        except (RuntimeError, ValueError, OSError) as error:
+            last_error = str(error)
             time.sleep(2)
-    raise RuntimeError('Installation verification failed; inspect docker compose logs')
+    raise RuntimeError('Installation verification failed: ' + last_error + '; inspect docker compose logs')
 
 
 if __name__ == '__main__':

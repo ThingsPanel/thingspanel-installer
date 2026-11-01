@@ -25,6 +25,52 @@ function Write-Warn    ($m) { Write-Host "[WARN]  $m" -ForegroundColor Yellow }
 function Write-Step    ($m) { Write-Host "`n[>>] $m" -ForegroundColor White -BackgroundColor DarkBlue }
 function Write-Err     ($m) { Write-Host "[ERROR] $m" -ForegroundColor Red; exit 1 }
 
+function Test-ExistingThingsVisDatabase($Directory) {
+    if (-not (Test-Path (Join-Path $Directory 'docker-compose.yml'))) { return $true }
+    Push-Location $Directory
+    try {
+        $rendered = & docker compose config --format json 2>$null
+        if ($LASTEXITCODE -ne 0) { $rendered = & docker compose config --no-interpolate --format json 2>$null }
+        if ($LASTEXITCODE -ne 0) { return $false }
+        $configuration = ($rendered -join "`n") | ConvertFrom-Json
+        $variables = $configuration.services.'thingsvis-server'.environment
+        if ($variables -is [array]) {
+            $values = @($variables | Where-Object { $_ -is [string] -and $_.StartsWith('DATABASE_URL=') } | ForEach-Object { $_.Substring(13) })
+            if ($values.Count -ne 1) { return $false }
+            $value = $values[0]
+        } else {
+            $value = $variables.DATABASE_URL
+        }
+        if (-not ($value -is [string] -and $value -match '^(?i:postgres(?:ql)?):')) { return $false }
+        $backendVariables = $configuration.services.backend.environment
+        $backend = @{}
+        if ($backendVariables -is [array]) {
+            foreach ($item in $backendVariables) {
+                if ($item -isnot [string] -or -not $item.Contains('=')) { return $false }
+                $separator = $item.IndexOf('=')
+                $key = $item.Substring(0, $separator)
+                if ($backend.ContainsKey($key)) { return $false }
+                $backend[$key] = $item.Substring($separator + 1)
+            }
+        } elseif ($null -ne $backendVariables) {
+            foreach ($property in $backendVariables.PSObject.Properties) { $backend[$property.Name] = $property.Value }
+        } else { return $false }
+        foreach ($required in @('GOTP_DB_PSQL_HOST','GOTP_DB_PSQL_PORT','GOTP_DB_PSQL_USERNAME','GOTP_DB_PSQL_DBNAME')) {
+            if (-not $backend.ContainsKey($required) -or [string]::IsNullOrWhiteSpace([string]$backend[$required])) { return $false }
+        }
+        if ($backend['GOTP_DB_PSQL_HOST'] -eq 'postgres' -and $null -eq $configuration.services.postgres) { return $false }
+        $selectors = @('GOTP_DB_PSQL_DBTYPE','GOTP_DB_DRIVER','GOTP_DB_PROVIDER','GOTP_DB_TYPE','DB_DRIVER','DB_PROVIDER','DB_TYPE','DATABASE_TYPE','DATABASE_PROVIDER','DATABASE_DRIVER')
+        foreach ($key in $backend.Keys) {
+            $name = ([string]$key).ToUpperInvariant()
+            $entry = $backend[$key]
+            if (($name.StartsWith('GOTP_DB_MYSQL_') -or $name.StartsWith('GOTP_DB_MARIADB_')) -and $null -ne $entry -and [string]$entry -ne '') { return $false }
+            if ($selectors -contains $name -and @('postgres','postgresql','pg') -notcontains ([string]$entry).ToLowerInvariant()) { return $false }
+            if ($name -eq 'DATABASE_URL' -and ($entry -isnot [string] -or $entry -notmatch '^(?i:postgres(?:ql)?):')) { return $false }
+        }
+        return $true
+    } catch { return $false } finally { Pop-Location }
+}
+
 Write-Host ""
 Write-Host "  ThingsPanel All-in-One Installer (Windows)" -ForegroundColor White
 Write-Host ""
@@ -49,6 +95,9 @@ try { docker compose version 2>$null } catch {
     Write-Err "docker compose (v2) not found. Please upgrade Docker Desktop."
 }
 Write-Success "Docker Compose v2 available"
+if (-not (Test-ExistingThingsVisDatabase $INSTALL_DIR)) {
+    Write-Err "Cannot confirm that the existing backend and ThingsVis use supported PostgreSQL configurations; existing configuration was not changed."
+}
 
 # ── 端口检查 ──────────────────────────────────────────────────────────────────
 Write-Step "Checking port availability"

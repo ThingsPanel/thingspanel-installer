@@ -33,6 +33,68 @@ step()    { echo -e "\n${BOLD}▶ $*${RESET}"; }
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
+check_existing_thingsvis_database() {
+    command_exists python3 || error "检查已有安装的数据源需要 Python 3；旧配置未修改。"
+    local old_compose_state
+    old_compose_state=$(python3 - "$INSTALL_DIR" <<'PY'
+import os, stat, sys
+try:
+    root = sys.argv[1]
+    root_info = os.lstat(root)
+    if not stat.S_ISDIR(root_info.st_mode): raise ValueError('not a directory')
+    path = os.path.join(root, 'docker-compose.yml')
+    metadata = os.lstat(path)
+    if not stat.S_ISREG(metadata.st_mode): raise ValueError('not a regular file')
+    with open(path, 'rb') as stream: stream.read(1)
+    print('present')
+except FileNotFoundError:
+    print('missing')
+except (OSError, ValueError):
+    sys.exit(1)
+PY
+    ) || error "无法读取已有 Compose 配置；旧配置未修改。"
+    [ "$old_compose_state" = present ] || return 0
+    if ! (set -o pipefail; cd "$INSTALL_DIR" && { rendered=$(docker compose config --format json 2>/dev/null) || rendered=$(docker compose config --no-interpolate --format json 2>/dev/null); } && printf '%s' "$rendered" | python3 -c '
+import json, sys
+from urllib.parse import urlsplit
+
+def environment(value):
+    if isinstance(value, dict): return value
+    if isinstance(value, list):
+        result = {}
+        for item in value:
+            if not isinstance(item, str) or "=" not in item: raise ValueError()
+            key, val = item.split("=", 1)
+            if key in result: raise ValueError()
+            result[key] = val
+        return result
+    raise ValueError()
+
+try:
+    services = json.load(sys.stdin)["services"]
+    vis = environment(services["thingsvis-server"]["environment"])
+    backend = environment(services["backend"]["environment"])
+    url = vis.get("DATABASE_URL")
+    if not isinstance(url, str): raise ValueError()
+    parsed_url = urlsplit(url)
+    if parsed_url.scheme not in ("postgres", "postgresql") or not parsed_url.hostname or "$" in parsed_url.hostname: raise ValueError()
+    required = ("GOTP_DB_PSQL_HOST", "GOTP_DB_PSQL_PORT", "GOTP_DB_PSQL_USERNAME", "GOTP_DB_PSQL_DBNAME")
+    if any(not isinstance(backend.get(key), (str, int)) or not str(backend[key]).strip() or "$" in str(backend[key]) for key in required): raise ValueError()
+    if backend["GOTP_DB_PSQL_HOST"] == "postgres" and not isinstance(services.get("postgres"), dict): raise ValueError()
+    selectors = ("GOTP_DB_PSQL_DBTYPE", "GOTP_DB_DRIVER", "GOTP_DB_PROVIDER", "GOTP_DB_TYPE", "DB_DRIVER", "DB_PROVIDER", "DB_TYPE", "DATABASE_TYPE", "DATABASE_PROVIDER", "DATABASE_DRIVER")
+    for key, value in backend.items():
+        name = str(key).upper()
+        if name.startswith(("GOTP_DB_MYSQL_", "GOTP_DB_MARIADB_")) and value not in (None, ""): raise ValueError()
+        if name in selectors and str(value).lower() not in ("postgres", "postgresql", "pg"): raise ValueError()
+        if name == "DATABASE_URL" and (not isinstance(value, str) or urlsplit(value).scheme not in ("postgres", "postgresql")): raise ValueError()
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+'); then
+        error "无法确认已有平台和 ThingsVis 使用受支持的 PostgreSQL 配置；旧配置未修改。"
+    fi
+}
+
 version_gte() {
     printf '%s\n%s\n' "$2" "$1" | sort -V -C
 }
@@ -290,6 +352,7 @@ main() {
     print_banner
     check_os
     check_docker
+    check_existing_thingsvis_database
     check_ports
     check_memory
     ensure_install_dir_access

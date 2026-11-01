@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -25,6 +26,23 @@ func initialized(t *testing.T) (*Store, string) {
 		t.Fatal(err)
 	}
 	return s, p
+}
+
+func TestFIFOStateIsRejectedWithoutBlocking(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	if err := syscall.Mkfifo(p, 0600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := Open(p); done <- err }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrInvalidState) {
+			t.Fatalf("FIFO was not rejected: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("opening FIFO blocked")
+	}
 }
 func req(gen uint64, key, resource, hash string) Request {
 	return Request{Instance: "instance-a", Generation: gen, RequestKey: key, Resource: resource, PayloadHash: hash}
@@ -428,4 +446,89 @@ func TestCrossProcessDifferentInstancesCompeteForOneResource(t *testing.T) {
 	if wins != 1 || conflicts != 1 {
 		t.Fatalf("expected one winner and one resource conflict; wins=%d conflicts=%d", wins, conflicts)
 	}
+}
+
+func TestPrivateStateDirectoryAndFilesAccepted(t *testing.T) {
+	s, p := initialized(t)
+	if _, err := s.HostID(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Dir(p), p, lockPath(p)} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm()&0077 != 0 && path != filepath.Dir(p) {
+			t.Fatalf("state file is not private: %s %o", path, info.Mode().Perm())
+		}
+	}
+}
+
+func TestRejectsSymlinkStateAndLockFiles(t *testing.T) {
+	t.Run("state symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "state.json")
+		real := filepath.Join(dir, "real.json")
+		if err := Initialize(real, "host-1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(real, path); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(path); err == nil {
+			t.Fatal("state symlink accepted")
+		}
+	})
+	t.Run("lock symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "state.json")
+		target := filepath.Join(dir, "target")
+		if err := os.WriteFile(target, []byte(""), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, lockPath(path)); err != nil {
+			t.Fatal(err)
+		}
+		if err := Initialize(path, "host-1"); err == nil {
+			t.Fatal("lock symlink accepted")
+		}
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("state created through unsafe lock: %v", err)
+		}
+	})
+}
+
+func TestRejectsInsecureDirectoryAndStateFileModes(t *testing.T) {
+	t.Run("directory writable by group", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "state.json")
+		if err := os.Chmod(dir, 0770); err != nil {
+			t.Fatal(err)
+		}
+		if err := Initialize(path, "host-1"); err == nil {
+			t.Fatal("group-writable state directory accepted")
+		}
+	})
+	t.Run("state readable by others", func(t *testing.T) {
+		_, path := initialized(t)
+		if err := os.Chmod(path, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(path); err == nil {
+			t.Fatal("world-readable state file accepted")
+		}
+	})
+	t.Run("lock readable by group", func(t *testing.T) {
+		_, path := initialized(t)
+		if err := os.Chmod(lockPath(path), 0640); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Open(path)
+		if err == nil {
+			t.Fatal("group-readable lock accepted")
+		}
+		if s != nil {
+			t.Fatal("store opened with insecure lock")
+		}
+	})
 }

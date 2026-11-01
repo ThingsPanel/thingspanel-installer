@@ -13,6 +13,7 @@ import tempfile
 import time
 import urllib.request
 import urllib.error
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / 'config/native'
@@ -28,6 +29,84 @@ def command(*args, data=None):
         # example a database URL). Do not propagate either into installer logs.
         raise RuntimeError(f'Native preparation command failed (exit {result.returncode})')
     return result.stdout.decode().strip()
+
+
+def validate_thingsvis_database(config):
+    """Reject unsupported datasource before generating credentials or starting services.
+
+    This guard covers the current ThingsVis service only; it does not certify a
+    platform storage profile or inspect any external database.
+    """
+    service = config.get('services', {}).get('thingsvis-server')
+    if not isinstance(service, dict):
+        raise RuntimeError('ThingsVis service is missing from the selected Compose configuration')
+    environment = service.get('environment')
+    if isinstance(environment, list):
+        values = [entry.partition('=') for entry in environment if isinstance(entry, str)]
+        matches = [value for key, separator, value in values if key == 'DATABASE_URL' and separator]
+        if len(matches) != 1:
+            raise RuntimeError('ThingsVis DATABASE_URL is missing or ambiguous in the selected Compose configuration')
+        environment = {'DATABASE_URL': matches[0]}
+    if not isinstance(environment, dict):
+        raise RuntimeError('ThingsVis database configuration is missing from the selected Compose configuration')
+    database_url = environment.get('DATABASE_URL')
+    if not isinstance(database_url, str):
+        raise RuntimeError('ThingsVis DATABASE_URL is missing from the selected Compose configuration')
+    # Do not echo DATABASE_URL: it can contain credentials.
+    parsed_url = urlsplit(database_url)
+    if parsed_url.scheme not in ('postgres', 'postgresql') or not parsed_url.hostname or '$' in parsed_url.hostname:
+        raise RuntimeError('ThingsVis currently supports only a PostgreSQL datasource in this installer')
+
+
+def validate_supported_backend_database(config):
+    """Conservative guard for the currently shipped PG backend configuration.
+
+    This does not certify the complete platform profile or an external server.
+    New provider configuration requires an explicit reviewed contract.
+    """
+    services = config.get('services', {})
+    backend = services.get('backend') if isinstance(services, dict) else None
+    if not isinstance(backend, dict):
+        raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
+    env = backend.get('environment')
+    if isinstance(env, list):
+        parsed = {}
+        for item in env:
+            if not isinstance(item, str) or '=' not in item:
+                raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
+            key, value = item.split('=', 1)
+            if key in parsed:
+                raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
+            parsed[key] = value
+        env = parsed
+    if not isinstance(env, dict):
+        raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
+    required = ('GOTP_DB_PSQL_HOST', 'GOTP_DB_PSQL_PORT', 'GOTP_DB_PSQL_USERNAME', 'GOTP_DB_PSQL_DBNAME')
+    if any(not isinstance(env.get(key), (str, int)) or not str(env[key]).strip() or '$' in str(env[key]) for key in required):
+        raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
+    if env['GOTP_DB_PSQL_HOST'] == 'postgres' and not isinstance(services.get('postgres'), dict):
+        raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
+    for key, value in env.items():
+        upper = str(key).upper()
+        if upper.startswith(('GOTP_DB_MYSQL_', 'GOTP_DB_MARIADB_')) and value not in (None, ''):
+            raise RuntimeError('A MySQL backend is not supported by this installer')
+        if upper in ('GOTP_DB_PSQL_DBTYPE', 'GOTP_DB_DRIVER', 'GOTP_DB_PROVIDER', 'GOTP_DB_TYPE', 'DB_DRIVER', 'DB_PROVIDER', 'DB_TYPE', 'DATABASE_TYPE', 'DATABASE_PROVIDER', 'DATABASE_DRIVER') and str(value).lower() not in ('postgres', 'postgresql', 'pg'):
+            raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
+        if upper == 'DATABASE_URL' and (not isinstance(value, str) or urlsplit(value).scheme not in ('postgres', 'postgresql')):
+            raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
+
+
+def check_thingsvis_database(uninterpolated=False):
+    args = ['docker', 'compose', 'config']
+    try:
+        rendered = command(*args, '--format', 'json')
+    except RuntimeError:
+        if not uninterpolated:
+            raise
+        rendered = command(*args, '--no-interpolate', '--format', 'json')
+    config = json.loads(rendered)
+    validate_thingsvis_database(config)
+    validate_supported_backend_database(config)
 
 
 def sql(database, statement):
@@ -222,7 +301,11 @@ if __name__ == '__main__':
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--pull', action='store_true')
     args = parser.parse_args()
+    # A fresh install has no generated secrets yet, so required Compose
+    # interpolation cannot run until configure() has created the .env file.
+    check_thingsvis_database(uninterpolated=True)
     env = configure()
+    check_thingsvis_database()
     if args.pull: pull_images()
     if args.bootstrap: bootstrap()
     if args.refresh_devices: refresh(env)

@@ -75,14 +75,14 @@ func Initialize(path, hostID string) error {
 
 // Open refuses absent or malformed state; it never silently initializes.
 func Open(path string) (*Store, error) {
-	var s diskState
-	if err := readState(path, &s); err != nil {
+	err := withLock(path, func() error { _, e := load(path); return e })
+	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrStateMissing
 		}
-		return nil, fmt.Errorf("%w: %v", ErrInvalidState, err)
-	}
-	if err := validateState(s); err != nil {
+		if errors.Is(err, ErrInvalidState) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: %v", ErrInvalidState, err)
 	}
 	return &Store{path: path}, nil
@@ -276,16 +276,60 @@ func withLock(path string, fn func() error) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(lockPath(path), os.O_CREATE|os.O_RDWR, 0600)
+	if err := checkDirectory(dir); err != nil {
+		return err
+	}
+	flags := os.O_CREATE | os.O_RDWR
+	flags |= syscall.O_NOFOLLOW
+	f, err := os.OpenFile(lockPath(path), flags, 0600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	if err = checkPrivateRegularFile(f); err != nil {
+		return fmt.Errorf("unsafe lock file: %w", err)
+	}
 	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 		return err
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return fn()
+}
+
+func checkDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("state directory must be a real directory")
+	}
+	if info.Mode().Perm()&0022 != 0 {
+		return errors.New("state directory must not be group/other writable")
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(st.Uid) != os.Geteuid() {
+		return errors.New("state directory must be owned by current service user")
+	}
+	return nil
+}
+
+func checkPrivateRegularFile(f *os.File) error {
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("must be a regular file")
+	}
+	if info.Mode().Perm()&0077 != 0 {
+		return errors.New("file must have no group/other permissions")
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(st.Uid) != os.Geteuid() {
+		return errors.New("file must be owned by current service user")
+	}
+	return nil
 }
 
 func load(path string) (diskState, error) {
@@ -300,7 +344,16 @@ func load(path string) (diskState, error) {
 	return d, nil
 }
 func readState(path string, v any) error {
-	b, e := os.ReadFile(path)
+	// Opening a FIFO for read can block before fstat rejects its type.
+	f, e := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if e != nil {
+		return e
+	}
+	defer f.Close()
+	if e = checkPrivateRegularFile(f); e != nil {
+		return fmt.Errorf("unsafe state file: %w", e)
+	}
+	b, e := io.ReadAll(f)
 	if e != nil {
 		return e
 	}
@@ -317,6 +370,11 @@ func readState(path string, v any) error {
 func validateState(d diskState) error {
 	if d.SchemaVersion != 1 || !valid(d.HostID) || d.MaxGeneration == nil || d.Requests == nil || d.Resources == nil || d.ReconciliationRequired == nil {
 		return errors.New("invalid state header")
+	}
+	for instance, generation := range d.MaxGeneration {
+		if !valid(instance) || generation == 0 {
+			return errors.New("invalid maximum generation")
+		}
 	}
 	for key, r := range d.Requests {
 		if key != r.Instance+"\x00"+r.RequestKey || !valid(r.Instance) || !valid(r.RequestKey) || !valid(r.Resource) || !valid(r.PayloadHash) || r.Generation == 0 || d.MaxGeneration[r.Instance] < r.Generation || (r.State != "held" && r.State != "released") {
@@ -338,9 +396,10 @@ func validateState(d diskState) error {
 			return errors.New("stale reservation missing reconciliation marker")
 		}
 	}
-	for resource := range d.ReconciliationRequired {
-		if _, ok := d.Resources[resource]; !ok {
-			return errors.New("orphan reconciliation marker")
+	for resource, required := range d.ReconciliationRequired {
+		held, ok := d.Resources[resource]
+		if !required || !ok || held.Generation >= d.MaxGeneration[held.Instance] {
+			return errors.New("invalid reconciliation marker")
 		}
 	}
 	return nil

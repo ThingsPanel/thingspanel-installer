@@ -21,9 +21,13 @@ this package to an externally callable operation.
 Resource identifiers are opaque strings and are not canonicalized. Adapters
 must define and validate stable canonical identities (including port address
 and protocol, hardware identity, and capacity semantics) before using them.
-The state directory and lock file must be private to the trusted Agent user;
-file ownership, symlinks and a host identity anchored outside this file have
-not yet been hardened. Missing local state requires reconciliation, not an
+The state directory and all of its ancestors must be controlled by trusted
+users. The code checks ownership and write permissions of the final directory,
+and checks the final state and lock files for ownership, permissions, regular
+file type and symlinks. It does not pin or validate ancestor directories, or
+defend against replacement by another process with the same service UID.
+Host identity anchored outside this file has not yet been implemented. Missing
+local state requires reconciliation, not an
 automatic reset. Persistence uses a same-directory temporary file, file sync,
 rename and directory sync, but crash/power-loss and fsync-failure injection
 have not been verified.

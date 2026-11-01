@@ -24,9 +24,9 @@ CLIENT = 'tp-community-backend'
 def command(*args, data=None):
     result = subprocess.run(args, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=ROOT)
     if result.returncode:
-        errors = result.stderr.decode(errors='replace').splitlines()
-        detail = next((line for line in errors if 'ERROR:' in line or 'FATAL:' in line), '')
-        raise RuntimeError('Native preparation command failed: ' + ' '.join(args[:4]) + ('; ' + detail if detail else ''))
+        # Child output and arguments may contain interpolated credentials (for
+        # example a database URL). Do not propagate either into installer logs.
+        raise RuntimeError(f'Native preparation command failed (exit {result.returncode})')
     return result.stdout.decode().strip()
 
 

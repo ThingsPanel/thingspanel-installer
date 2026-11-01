@@ -184,7 +184,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - wget -qO- --spider http://127.0.0.1:8000/
+      - wget -qO- --spider http://127.0.0.1:8000/api/v1/health
       interval: 10s
       timeout: 5s
       retries: 12

@@ -1,7 +1,7 @@
 //go:build linux
 
-// Package agent implements a local-only candidate state kernel. It does not
-// execute workloads, contact services, or define a network/API protocol.
+// Package agent implements local host state and a create-only Docker adapter.
+// It never starts workloads and has no public control or activation API.
 package agent
 
 import (
@@ -45,12 +45,13 @@ type Request struct {
 }
 
 type diskState struct {
-	SchemaVersion          int                    `json:"schema_version"`
-	HostID                 string                 `json:"host_id"`
-	MaxGeneration          map[string]uint64      `json:"max_generation"`
-	Requests               map[string]Reservation `json:"requests"`
-	Resources              map[string]Reservation `json:"resources"`
-	ReconciliationRequired map[string]bool        `json:"reconciliation_required"`
+	SchemaVersion          int                             `json:"schema_version"`
+	HostID                 string                          `json:"host_id"`
+	MaxGeneration          map[string]uint64               `json:"max_generation"`
+	Requests               map[string]Reservation          `json:"requests"`
+	Resources              map[string]Reservation          `json:"resources"`
+	ReconciliationRequired map[string]bool                 `json:"reconciliation_required"`
+	Preparations           map[string]containerPreparation `json:"preparations,omitempty"`
 }
 
 type Store struct{ path string }
@@ -106,6 +107,15 @@ func (s *Store) AcceptGeneration(instance string, generation uint64) error {
 			return ErrGenerationStale
 		}
 		if generation > current {
+			// A timed-out Docker create can still complete after its client
+			// releases the local lock. Do not accept a new generation while an
+			// original preparation result is unresolved; local epoch changes
+			// cannot cancel an already-dispatched daemon request.
+			for _, preparation := range d.Preparations {
+				if preparation.Instance == instance && preparation.State != PreparationPrepared {
+					return ErrPreparationRecoveryRequired
+				}
+			}
 			d.MaxGeneration[instance] = generation
 			for resource, held := range d.Resources {
 				if held.Instance == instance && held.Generation < generation {
@@ -132,9 +142,9 @@ func (s *Store) HostID() (string, error) {
 
 // Reserve persists the maximum generation and exclusive resource ownership.
 // A repeated identical request is idempotent; changing its contents conflicts.
-// This watermark is bookkeeping, NOT an execution fence: any future executor
-// must hold an instance lock and re-check generation immediately before every
-// external side effect. This package intentionally performs no such effects.
+// This watermark alone is bookkeeping, not an execution fence. Effect adapters
+// must re-check generation while holding the same local state lock. The bounded
+// DockerPreparer does that for its create-only operation; Reserve has no effects.
 func (s *Store) Reserve(r Request) (Reservation, error) {
 	var result Reservation
 	if !valid(r.Instance) || !valid(r.Resource) || !valid(r.RequestKey) || !valid(r.PayloadHash) || r.Generation == 0 {
@@ -187,6 +197,9 @@ func (s *Store) Release(instance string, generation uint64, resource string) err
 		if !ok || h.Instance != instance || h.Generation != generation || d.MaxGeneration[instance] != generation {
 			return ErrNotOwner
 		}
+		if _, prepared := d.Preparations[instance+"\x00"+h.RequestKey]; prepared {
+			return ErrPreparationRecoveryRequired
+		}
 		delete(d.Resources, resource)
 		h.State = "released"
 		d.Requests[instance+"\x00"+h.RequestKey] = h
@@ -217,6 +230,9 @@ func (s *Store) ReconcileRelease(instance string, currentGeneration uint64, reso
 		held, ok := d.Resources[resource]
 		if !ok || held.Instance != instance || held.Generation >= currentGeneration || !d.ReconciliationRequired[resource] {
 			return ErrNotOwner
+		}
+		if _, prepared := d.Preparations[instance+"\x00"+held.RequestKey]; prepared {
+			return ErrPreparationRecoveryRequired
 		}
 		host = d.HostID
 		snapshot = held
@@ -402,7 +418,7 @@ func validateState(d diskState) error {
 			return errors.New("invalid reconciliation marker")
 		}
 	}
-	return nil
+	return validatePreparations(d)
 }
 func writeState(path string, d diskState) error {
 	b, e := json.MarshalIndent(d, "", "  ")

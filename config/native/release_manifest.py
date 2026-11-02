@@ -154,22 +154,8 @@ def _walk(payload: Path) -> set[str]:
     return found
 
 
-def verify_release(
-    manifest: bytes,
-    signature: bytes,
-    trust_root: os.PathLike | str | None,
-    payload_dir: os.PathLike | str,
-    *,
-    expected_publisher: str,
-    expected_version: str | None = None,
-    revoked_versions: frozenset[str] | set[str] = frozenset(),
-    now: int | None = None,
-) -> dict:
-    """Verify signature, identity, validity window and the exact payload contents.
-
-    Returns the parsed manifest. Raises ``ManifestError`` (or ``TrustRootNotConfigured``)
-    on any mismatch; callers must not run or install payload files in that case.
-    """
+def _verify_header(manifest, signature, trust_root, *, expected_publisher, expected_version, revoked_versions, now):
+    """Signature, identity, validity window and parsed file table (path -> (sha256, size))."""
     root = load_trust_root(trust_root)
     verify_signature(manifest, signature, root)
     doc = _parse(manifest)
@@ -187,9 +173,6 @@ def verify_release(
     if current >= release["expires_at"]:
         raise ManifestError("expired", "release manifest has expired")
 
-    payload = Path(payload_dir)
-    if not payload.is_dir():
-        raise ManifestError("missing_payload", f"payload directory not found: {payload}")
     expected: dict[str, tuple[str, int]] = {}
     for entry in doc["files"]:
         if not isinstance(entry, dict):
@@ -201,7 +184,33 @@ def verify_release(
         if rel in expected:
             raise ManifestError("malformed_manifest", f"duplicate path {rel}")
         expected[rel] = (digest, size)
+    return doc, expected
 
+
+def verify_release(
+    manifest: bytes,
+    signature: bytes,
+    trust_root: os.PathLike | str | None,
+    payload_dir: os.PathLike | str,
+    *,
+    expected_publisher: str,
+    expected_version: str | None = None,
+    revoked_versions: frozenset[str] | set[str] = frozenset(),
+    now: int | None = None,
+) -> dict:
+    """Verify signature, identity, validity window and the exact payload contents.
+
+    Returns the parsed manifest. Raises ``ManifestError`` (or ``TrustRootNotConfigured``)
+    on any mismatch; callers must not run or install payload files in that case.
+    """
+    doc, expected = _verify_header(
+        manifest, signature, trust_root,
+        expected_publisher=expected_publisher, expected_version=expected_version,
+        revoked_versions=revoked_versions, now=now,
+    )
+    payload = Path(payload_dir)
+    if not payload.is_dir():
+        raise ManifestError("missing_payload", f"payload directory not found: {payload}")
     actual = _walk(payload)
     missing = sorted(set(expected) - actual)
     if missing:
@@ -211,6 +220,43 @@ def verify_release(
         raise ManifestError("unlisted_file", ", ".join(extra))
     for rel, (digest, size) in sorted(expected.items()):
         got_digest, got_size = _sha256(payload / rel)
+        if got_size != size or got_digest != digest:
+            raise ManifestError("digest_mismatch", rel)
+    return doc
+
+
+def verify_files(
+    manifest: bytes,
+    signature: bytes,
+    trust_root: os.PathLike | str | None,
+    files: dict[str, os.PathLike | str],
+    *,
+    expected_publisher: str,
+    expected_version: str | None = None,
+    revoked_versions: frozenset[str] | set[str] = frozenset(),
+    now: int | None = None,
+) -> dict:
+    """Verify a subset of a release: every given file must be listed with matching size and SHA-256.
+
+    ``files`` maps a manifest path to the local copy (for example an updater's staged files). A file the
+    manifest does not list, or a symlink, is rejected; listed files that are not given are not checked.
+    """
+    doc, expected = _verify_header(
+        manifest, signature, trust_root,
+        expected_publisher=expected_publisher, expected_version=expected_version,
+        revoked_versions=revoked_versions, now=now,
+    )
+    if not files:
+        raise ManifestError("malformed_manifest", "no files were given to verify")
+    for rel in sorted(files):
+        _clean_path(rel)
+        local = Path(files[rel])
+        if rel not in expected:
+            raise ManifestError("unlisted_file", rel)
+        if local.is_symlink() or not local.is_file():
+            raise ManifestError("missing_file", rel)
+        digest, size = expected[rel]
+        got_digest, got_size = _sha256(local)
         if got_size != size or got_digest != digest:
             raise ManifestError("digest_mismatch", rel)
     return doc

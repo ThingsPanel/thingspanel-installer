@@ -9,7 +9,7 @@ set -euo pipefail
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="ThingsPanel/thingspanel-installer"
 RAW_BASE="https://install.thingspanel.io"
-UPDATE_ENGINE_SHA256="f9a411d3abe743d05ed16808947e41540bef3e062f1a9b058815a4a0dfa179e2"
+UPDATE_ENGINE_SHA256="79d38727a955470bad4c63978425a38363d7c341d86d9233cafb10f46e14a478"
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -50,7 +50,14 @@ PY
             error "更新器内容与本入口固定摘要不一致；现有配置未修改。"
         fi
     fi
-    if ! python3 "$engine" --root "$INSTALL_DIR" --base-url "$RAW_BASE" --expected-version "$TARGET_VERSION"; then
+    local args=(--root "$INSTALL_DIR" --base-url "$RAW_BASE" --expected-version "$TARGET_VERSION")
+    # Signed releases: a trust root is supplied out of band (never from the payload).
+    if [ -n "${TP_RELEASE_TRUST_ROOT:-}" ]; then args+=(--release-trust-root "$TP_RELEASE_TRUST_ROOT"); fi
+    if [ "${TP_REQUIRE_SIGNED_RELEASE:-}" = "1" ]; then args+=(--require-signed-release); fi
+    if [ -n "${TP_REVOKED_VERSIONS:-}" ]; then
+        for revoked in ${TP_REVOKED_VERSIONS//,/ }; do args+=(--revoked-version "$revoked"); done
+    fi
+    if ! python3 "$engine" "${args[@]}"; then
         [ -z "$temporary" ] || rm -rf "$temporary"
         error "升级未完成；请保留 .thingspanel-update 中的恢复记录。"
     fi

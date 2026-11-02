@@ -11,6 +11,7 @@ import argparse
 import ast
 import contextlib
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,15 @@ import urllib.error
 
 class UpdateError(RuntimeError):
     pass
+
+
+# Signed release verification (optional until a release trust root is supplied).
+# The verifier is loaded only if its SHA-256 equals this pin, which is itself
+# covered by the entry points' pin of this file.
+RELEASE_VERIFIER = 'config/native/release_manifest.py'
+RELEASE_VERIFIER_SHA256 = "717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374"
+RELEASE_MANIFEST = 'release-manifest.json'
+DEFAULT_RELEASE_PUBLISHER = 'https://github.com/ThingsPanel/thingspanel-installer/.github/workflows/release.yml'
 
 
 COMMON = (
@@ -319,7 +329,10 @@ def download(url, path):
 
 class Transaction:
     def __init__(self, root, *, platform=None, downloader=download,
-                 validator=None, checkpoint=None):
+                 validator=None, checkpoint=None, release_policy=None):
+        # release_policy: None (no signature check) or a dict with 'trust_root',
+        # 'publisher' and 'revoked'. A policy without a usable trust root fails closed.
+        self.release_policy = release_policy
         self.root = Path(os.path.abspath(root))
         if self.root.is_symlink() or (self.root.exists() and not self.root.is_dir()):
             raise UpdateError('Install directory must be a real directory')
@@ -446,6 +459,40 @@ class Transaction:
                 if not same(file_info(safe_target(self.root, entry['path'])), entry['old']):
                     raise UpdateError('Managed file changed after preflight: ' + entry['path'])
 
+    def load_release_verifier(self, source, directory):
+        sibling = Path(__file__).resolve().with_name('release_manifest.py')
+        candidate = sibling
+        if file_info(sibling) is None or hashlib.sha256(sibling.read_bytes()).hexdigest() != RELEASE_VERIFIER_SHA256:
+            candidate = directory / 'verifier' / 'release_manifest.py'
+            self.downloader(source.rstrip('/') + '/' + RELEASE_VERIFIER, candidate)
+        content = candidate.read_bytes()
+        if hashlib.sha256(content).hexdigest() != RELEASE_VERIFIER_SHA256:
+            raise UpdateError('Release verifier does not match the digest pinned by this updater')
+        spec = importlib.util.spec_from_loader('tp_release_manifest', loader=None)
+        module = importlib.util.module_from_spec(spec)
+        exec(compile(content, str(candidate), 'exec'), module.__dict__)
+        return module
+
+    def verify_signed_release(self, source, directory, stage, data, expected_version):
+        policy = self.release_policy
+        verifier = self.load_release_verifier(source, directory)
+        release = directory / 'release'
+        private_directory(release)
+        base = source.rstrip('/') + '/' + RELEASE_MANIFEST
+        self.downloader(base, release / 'manifest.json')
+        self.downloader(base + '.sig', release / 'manifest.json.sig')
+        files = {entry['path']: stage / entry['path'] for entry in data['files']}
+        try:
+            verifier.verify_files(
+                (release / 'manifest.json').read_bytes(), (release / 'manifest.json.sig').read_bytes(),
+                policy.get('trust_root'), files,
+                expected_publisher=policy.get('publisher') or DEFAULT_RELEASE_PUBLISHER,
+                expected_version=expected_version or None,
+                revoked_versions=frozenset(policy.get('revoked') or ()))
+        except verifier.ManifestError as error:
+            # Only the machine-readable reason; never echo manifest content.
+            raise UpdateError('Signed release verification failed: ' + error.reason) from None
+
     def prepare(self, source, expected_version):
         parsed = urlsplit(source)
         if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.query or parsed.fragment:
@@ -487,6 +534,8 @@ class Transaction:
                 if os.name == 'nt':
                     # Windows chmod exposes read-only/writable, not POSIX rwx.
                     entry['mode'] = entry['new']['mode']
+            if self.release_policy is not None:
+                self.verify_signed_release(source, directory, stage, data, expected_version)
             self.validator(stage, expected_version)
             self.checkpoint('validated')
             self.check_unchanged(data, before_apply=True)
@@ -716,12 +765,23 @@ def main():
     parser.add_argument('--base-url', default='https://install.thingspanel.io')
     parser.add_argument('--expected-version', default='')
     parser.add_argument('--recover-config-only', action='store_true')
+    parser.add_argument('--release-trust-root', default='', help='pinned ECDSA P-256 public key (PEM) for signed releases')
+    parser.add_argument('--require-signed-release', action='store_true',
+                        help='fail closed unless the release verifies against --release-trust-root')
+    parser.add_argument('--release-publisher', default=DEFAULT_RELEASE_PUBLISHER)
+    parser.add_argument('--revoked-version', action='append', default=[])
     args = parser.parse_args()
     try:
         root = Path(os.path.abspath(args.root))
         if not args.recover_config_only and not (root / 'config/native/internal.crt').is_file() and shutil.which('openssl') is None:
             raise UpdateError('OpenSSL is required by native certificate preparation; no configuration was replaced')
-        transaction = Transaction(args.root)
+        policy = None
+        if args.release_trust_root or args.require_signed_release:
+            policy = {'trust_root': args.release_trust_root or None, 'publisher': args.release_publisher,
+                      'revoked': args.revoked_version}
+        elif not args.recover_config_only:
+            print('[WARN] No release trust root configured; the release signature is not verified.', file=sys.stderr)
+        transaction = Transaction(args.root, release_policy=policy)
         transaction.run(args.base_url, expected_version=args.expected_version,
                         activate=activate_native, recovery_only=args.recover_config_only)
         print('Configuration recovery complete.' if args.recover_config_only else 'Installation operation completed.')

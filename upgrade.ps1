@@ -27,7 +27,7 @@ $ErrorActionPreference = "Stop"
 
 $REPO     = "ThingsPanel/thingspanel-installer"
 $RAW_BASE = "https://install.thingspanel.io"
-$UPDATE_ENGINE_SHA256 = "f9a411d3abe743d05ed16808947e41540bef3e062f1a9b058815a4a0dfa179e2"
+$UPDATE_ENGINE_SHA256 = "79d38727a955470bad4c63978425a38363d7c341d86d9233cafb10f46e14a478"
 
 function Write-Info    ($m) { Write-Host "[INFO]  $m" -ForegroundColor Cyan }
 function Write-Success ($m) { Write-Host "[OK]    $m" -ForegroundColor Green }
@@ -61,6 +61,10 @@ function Invoke-SafeUpdate($Directory, $ExpectedVersion) {
         }
         $arguments = $pythonArgs + @($engine, '--root', $Directory, '--base-url', $RAW_BASE)
         if ($ExpectedVersion) { $arguments += @('--expected-version', $ExpectedVersion) }
+        # Signed releases: a trust root is supplied out of band (never from the payload).
+        if ($env:TP_RELEASE_TRUST_ROOT) { $arguments += @('--release-trust-root', $env:TP_RELEASE_TRUST_ROOT) }
+        if ($env:TP_REQUIRE_SIGNED_RELEASE -eq '1') { $arguments += @('--require-signed-release') }
+        if ($env:TP_REVOKED_VERSIONS) { foreach ($revoked in ($env:TP_REVOKED_VERSIONS -split '[,\s]+' | Where-Object { $_ })) { $arguments += @('--revoked-version', $revoked) } }
         & $python.Source @arguments
         if ($LASTEXITCODE -ne 0) { throw 'Upgrade did not complete. Preserve .thingspanel-update for recovery.' }
     } finally {

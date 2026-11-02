@@ -228,13 +228,68 @@ class TransactionTests(unittest.TestCase):
         with self.assertRaisesRegex(update.UpdateError, 'No database rollback'):
             self.tx().run(BASE, recovery_only=True)
 
+    def test_activation_environment_backup_and_receipt_survive_completion(self):
+        tx = self.tx()
+        old = self.originals(tx)
+        before = (self.root / '.env').read_bytes()
+        after = b'TP_AUTH=synthetic-new-identity\nTP_AUTH_POLICY=fixture-v1\n'
+        tx.run(BASE, activate=lambda _: tx.write_activation_environment(after))
+        data = tx.load()
+        self.assertEqual(data['phase'], 'complete')
+        entry = data['activation_files']['.env']
+        self.assertEqual(entry['old'], old['.env'])
+        self.assertTrue(entry['applied'])
+        self.assertTrue(update.same(entry['new'], update.file_info(self.root / '.env')))
+        self.assertEqual((tx.state / data['operation'] / 'backup/.env').read_bytes(), before)
+        self.tx().run(BASE, recovery_only=True)
+        self.assertEqual((self.root / '.env').read_bytes(), after)
+
+    @unittest.skipIf(os.name == 'nt', 'SIGKILL semantics are checked on POSIX')
+    def test_activation_environment_kill9_never_claims_external_rollback(self):
+        parent = self.root
+        for event in ('activation-env-prepared', 'activation-env-written'):
+            with self.subTest(event=event):
+                self.root = parent / event
+                self.root.mkdir()
+                old = self.originals()
+                process = self.worker('kill-env', event)
+                _, err = process.communicate(timeout=20)
+                self.assertEqual(process.returncode, -signal.SIGKILL, err)
+                data = self.tx().load()
+                self.assertEqual(data['phase'], 'activation_started')
+                self.assertFalse(data['activation_files']['.env']['applied'])
+                expected = old['.env'] if event == 'activation-env-prepared' else data['activation_files']['.env']['new']
+                self.assertTrue(update.same(update.file_info(self.root / '.env'), expected))
+                recover = self.worker('recover', '')
+                _, err = recover.communicate(timeout=20)
+                self.assertNotEqual(recover.returncode, 0)
+                self.assertIn('No database rollback', err)
+                self.assertTrue(update.same(update.file_info(self.root / '.env'), expected))
+        self.root = parent
+
+    @unittest.skipIf(os.name == 'nt', 'SIGKILL semantics are checked on POSIX')
+    def test_broker_directory_interruption_is_recorded_and_never_accepted_as_complete(self):
+        process = self.worker('kill-broker', 'activation-file-written:config/native/broker/plugin-token')
+        _, err = process.communicate(timeout=20)
+        self.assertEqual(process.returncode, -signal.SIGKILL, err)
+        data = self.tx().load()
+        self.assertEqual(data['phase'], 'activation_started')
+        entry = data['activation_files']['config/native/broker/plugin-token']
+        self.assertIsNone(entry['old'])
+        self.assertFalse(entry['applied'])
+        self.assertIn('config/native/broker', data['activation_dirs'])
+        with self.assertRaisesRegex(update.UpdateError, 'No database rollback'):
+            self.tx().run(BASE, recovery_only=True)
+
     def test_corrupt_journal_is_rejected_without_target_changes(self):
         tx = self.tx()
         old = self.originals(tx)
         data = tx.prepare(BASE, '')
         corruptions = [
             ('created_dirs', ['../outside']), ('watched', []), ('intent', '../outside'),
-            ('operation', '../outside'), ('phase', 'unrecognized')]
+            ('operation', '../outside'), ('phase', 'unrecognized'),
+            ('activation_files', {'.env': {'old': data['watched']['.env'],
+                                         'new': data['watched']['.env'], 'applied': True}})]
         for key, value in corruptions:
             bad = copy.deepcopy(data); bad[key] = value
             tx.journal.write_text(json.dumps(bad))
@@ -311,6 +366,70 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(process.returncode, -signal.SIGKILL)
         self.tx().run(BASE, recovery_only=True)
         self.assertOriginals(old)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX signal delivery is checked on Linux and macOS')
+    def test_sigterm_during_update_is_recovered_by_new_process(self):
+        old = self.originals()
+        for event in ('prepared', 'after-replace:config/native/prepare.py', 'config_committed'):
+            with self.subTest(event=event):
+                process = self.worker('terminate', event)
+                _, err = process.communicate(timeout=20)
+                self.assertEqual(process.returncode, -signal.SIGTERM, err)
+                recover = self.worker('recover', '')
+                _, err = recover.communicate(timeout=20)
+                self.assertEqual(recover.returncode, 0, err)
+                self.assertOriginals(old)
+
+    @unittest.skipIf(os.name == 'nt', 'SIGKILL semantics are checked on POSIX')
+    def test_kill9_restores_original_absence_and_recovery_is_idempotent(self):
+        process = self.worker('kill', 'after-replace:config/native/update.py')
+        _, err = process.communicate(timeout=20)
+        self.assertEqual(process.returncode, -signal.SIGKILL, err)
+        for _ in range(2):
+            recover = self.worker('recover', '')
+            _, err = recover.communicate(timeout=20)
+            self.assertEqual(recover.returncode, 0, err)
+            for relative, _ in self.tx().artifacts:
+                self.assertFalse((self.root / relative).exists(), relative)
+            self.assertFalse((self.root / 'config').exists())
+            self.assertEqual(self.tx().load()['phase'], 'recovered')
+
+    def test_completed_journal_is_not_rolled_back_on_restart(self):
+        tx = self.tx()
+        self.originals(tx)
+        tx.run(BASE)
+        complete = {p: update.file_info(self.root / p) for p, _ in tx.artifacts}
+        for _ in range(2):
+            recover = self.worker('recover', '')
+            _, err = recover.communicate(timeout=20)
+            self.assertEqual(recover.returncode, 0, err)
+            self.assertOriginals(complete)
+            self.assertEqual(self.tx().load()['phase'], 'complete')
+
+    def test_second_process_cannot_enter_during_config_replacement(self):
+        old = self.originals()
+        for event in ('prepared', 'after-replace:config/native/prepare.py', 'config_committed'):
+            with self.subTest(event=event):
+                ready = self.root / '.worker-ready'
+                if ready.exists():
+                    ready.unlink()
+                process = self.worker('hold', event)
+                try:
+                    deadline = time.monotonic() + 10
+                    while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertTrue(ready.exists())
+                    competitor = self.worker('recover', '')
+                    _, err = competitor.communicate(timeout=20)
+                    self.assertNotEqual(competitor.returncode, 0)
+                    self.assertIn('Another installer operation is active', err)
+                finally:
+                    process.kill()
+                    process.communicate(timeout=20)
+                recover = self.worker('recover', '')
+                _, err = recover.communicate(timeout=20)
+                self.assertEqual(recover.returncode, 0, err)
+                self.assertOriginals(old)
 
     def test_process_lock_covers_activation_and_is_released_by_termination(self):
         self.originals()

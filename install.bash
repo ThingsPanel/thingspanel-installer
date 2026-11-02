@@ -19,7 +19,7 @@ MQTT_PORT="${MQTT_PORT:-1883}"
 MIN_DOCKER_VERSION="20.10"
 MIN_COMPOSE_VERSION="2.0"
 SUDO_CMD=""
-UPDATE_ENGINE_SHA256="b50a1640df02a50a8ac6c2bdcb46edba59d88f2afbbd490a19190da23be938d3"
+UPDATE_ENGINE_SHA256="f9a411d3abe743d05ed16808947e41540bef3e062f1a9b058815a4a0dfa179e2"
 
 # ── 颜色输出 ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'

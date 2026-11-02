@@ -55,9 +55,13 @@ jobs:
           TP_AUTOMATION_TOKEN=syntax-check-only
           TP_MQTT_USER=syntax-check-only
           TP_MQTT_PASSWORD=syntax-check-only
+          TP_PROTOCOL_MQTT_USER=syntax-check-only
+          TP_PROTOCOL_MQTT_PASSWORD=syntax-check-only
           TP_NATIVE_DB_PASSWORD=syntax-check-only
           TP_NOTIFICATION_KEYRING_B64=syntax-check-only
+          TP_THINGSVIS_AUTH_SECRET=syntax-check-only-not-a-runtime-auth-secret
           EOF
+          python3 config/native/prepare.py
 
       - name: Validate docker-compose syntax
         run: docker compose config --quiet
@@ -71,6 +75,7 @@ jobs:
               --add-host thingsvis-studio:127.0.0.1 \
               --add-host encore-api:127.0.0.1 \
               --add-host notification-core:127.0.0.1 \
+              -v "$PWD/config/native:/run/config:ro" \
               -v "$PWD/niginx.conf:/etc/nginx/nginx.conf:ro" \
               nginx:alpine nginx -t
           fi

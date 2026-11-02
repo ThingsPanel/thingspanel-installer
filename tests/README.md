@@ -13,4 +13,8 @@ POSIX 子进程测试在 6 个实际阶段发送 `SIGKILL`，由第二进程读�
 
 GitHub `update-transaction` job 在 Linux、macOS、Windows 执行此目录。Windows 跳过 Bash 入口、POSIX `SIGKILL` 和需要特殊权限的 symlink 用例，运行真实 Windows 文件替换/锁路径和其余事务测试，并解析 PowerShell 入口。首次 CI 成功前，不能将这些平台列为已实测通过。
 
+接管复验加强了每个下载边界的 HTTPS 主机和 URL 顺序断言，防止 bootstrap 拒绝被误记为第 2～7 个 payload 故障已执行。新增 3 个 SIGTERM 阶段、缺文件状态的 SIGKILL 恢复、完成/已恢复记录的重启幂等、配置替换期间真实双进程互斥。activation 的 `.env` 在意图落盘和目标替换后各发送一次 SIGKILL，两个未决状态均必须保留现场，不能自动宣称外部回滚。
+
+`test_prepare_auth_secret.py` 检查真实临时目录中的凭据持久化、重复 prepare、显式安全镜像选择、SSO 一次性策略轮换与冲突拒绝。测试只用临时证书占位符避免调用 OpenSSL，并选择非 root 所有权处理分支；不启动 ThingsVis 或证明 JWT/SSO 的服务器行为。真实 Windows 对只读文件替换和 PowerShell/NTFS 的行为仍须在原生环境单列验收。
+
 旧 `config/native/test_*.py` 中还有需要真实 Docker Compose **CLI 配置解析**和历史 Git tags 的用例。云端缺少 CLI、镜像 checkout 缺少 tags 时，应如实记录未执行/失败原因，不替换其真实解析为 fixture 后宣称通过。

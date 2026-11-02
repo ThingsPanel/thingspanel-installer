@@ -8,6 +8,7 @@ import secrets
 import socket
 import subprocess
 import hashlib
+import importlib.util
 import re
 import tempfile
 import time
@@ -20,6 +21,7 @@ CONFIG = ROOT / 'config/native'
 CELL = 'community'
 INSTANCE = 'community-mosquitto'
 CLIENT = 'tp-community-backend'
+_UPDATE_FILES = None
 
 
 def command(*args, data=None):
@@ -114,19 +116,156 @@ def sql(database, statement):
                    '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', data=statement.encode())
 
 
+def update_files():
+    """Load the existing reviewed updater only after datasource preflight."""
+    global _UPDATE_FILES
+    if _UPDATE_FILES is None:
+        spec = importlib.util.spec_from_file_location('tp_native_update_files', Path(__file__).with_name('update.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _UPDATE_FILES = module
+    return _UPDATE_FILES
+
+
 def save(name, value, broker=False):
-    path = CONFIG / name
-    path.write_text(json.dumps(value, indent=2) + '\n', encoding='utf-8')
-    path.chmod(0o440 if broker else 0o600)
+    # Formal install/upgrade holds the updater's process lock. Reuse its
+    # durable replacement implementation: writing an existing 0440 broker
+    # file in place fails for supported non-root Docker Desktop installs.
+    files = update_files()
+    path = files.safe_target(CONFIG, ('broker/' if broker else '') + name)
+    original = files.file_info(path)
+    ownership = original
     if broker and os.name == 'posix' and os.geteuid() == 0:
-        os.chown(path, 1883, 1883)
+        ownership = {'uid': 1883, 'gid': 1883}
+    write_configuration_file(path, (json.dumps(value, indent=2) + '\n').encode('utf-8'),
+                             0o440 if broker else 0o600, ownership)
+
+
+def write_configuration_file(path, content, mode, ownership=None):
+    files = update_files()
+    original = files.file_info(path)
+    owner = ownership if ownership is not None else original
+    # Avoid unnecessary inode changes for configuration that is already exact.
+    if original is not None and path.read_bytes() == content and original['mode'] == mode:
+        if owner is None or os.name == 'nt' or (original['uid'], original['gid']) == (owner['uid'], owner['gid']):
+            return
+    if (ROOT / '.thingspanel-update/journal.json').exists():
+        transaction = files.Transaction(ROOT)
+        relative = path.relative_to(ROOT).as_posix()
+        data = transaction.load()
+        if data and data['phase'] == 'activation_started' and os.environ.get('TP_INSTALLER_ACTIVE_OPERATION') == data['operation']:
+            transaction.write_activation_file(relative, content, mode, owner)
+        elif data and data['phase'] in ('complete', 'recovered') and relative == 'config/native/broker/services.json':
+            # Preserve the existing explicit device-scope refresh command.
+            # This is one atomic resource projection, not an install retry or
+            # identity change; serialize it against any new installer run.
+            with files.update_lock(transaction.state):
+                latest = transaction.load()
+                if latest is None or latest['phase'] not in ('complete', 'recovered'):
+                    raise RuntimeError('Installation state changed; broker refresh was not applied')
+                files.durable_bytes(path, content, mode, owner)
+        else:
+            raise RuntimeError('Configuration requires an active installer operation; preserve unresolved installation state')
+    else:
+        files.durable_bytes(path, content, mode, owner)
+
+
+def secret_value(value, key, from_dotenv=False):
+    if value is None:
+        return None
+    if from_dotenv:
+        value = value.strip()
+        literal = value.startswith("'") and value.endswith("'")
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('\"', "'"):
+            value = value[1:-1]
+        if ('$' in value and not literal) or '\\' in value or ' #' in value:
+            raise RuntimeError(key + ' must be a stable literal .env value; existing configuration was not changed')
+    if len(value) < 32 or any(character in value for character in ('\n', '\r', '\x00')):
+        raise RuntimeError(key + ' must contain at least 32 characters; existing configuration was not changed')
+    return value
+
+
+def deployment_secret(current, key):
+    """Keep a deployment service credential stable across install and upgrade."""
+    saved = current.get(key)
+    supplied = os.environ.get(key)
+
+    saved_value, supplied_value = secret_value(saved, key, True), secret_value(supplied, key)
+    if saved_value is not None and supplied_value is not None and saved_value != supplied_value:
+        raise RuntimeError(key + ' conflicts with the existing deployment; existing configuration was not changed')
+    if saved is not None:
+        return saved  # Preserve quoting; removing it can enable Compose interpolation.
+    if supplied_value is not None:
+        if re.fullmatch(r'[A-Za-z0-9_+=./-]+', supplied_value) is None:
+            raise RuntimeError(key + ' needs an unambiguous .env encoding; existing configuration was not changed')
+        return supplied_value
+    return secrets.token_hex(32)
+
+
+def thingsvis_auth_settings(current):
+    """Rotate once only when the verified-SSO artifact is explicitly selected.
+
+    The target is a release-owner assertion bound to its reviewed image lock;
+    it is not a claim that this installer has verified a registry signature.
+    """
+    policy = 'verified-sso-v1'
+    recorded = current.get('TP_THINGSVIS_AUTH_POLICY', '')
+    target = os.environ.get('TP_THINGSVIS_AUTH_POLICY_TARGET', current.get('TP_THINGSVIS_AUTH_POLICY_TARGET', ''))
+    selected = os.environ.get('TP_THINGSVIS_IMAGE', current.get('TP_THINGSVIS_IMAGE', ''))
+    local_id = os.environ.get('TP_THINGSVIS_LOCAL_IMAGE_ID', current.get('TP_THINGSVIS_LOCAL_IMAGE_ID', ''))
+    if local_id and (not selected or re.fullmatch(r'sha256:[0-9a-f]{64}', local_id) is None):
+        raise RuntimeError('A local ThingsVis image requires its exact Docker image ID and selected image')
+    selection = {'TP_THINGSVIS_IMAGE': selected} if selected else {}
+    if local_id or 'TP_THINGSVIS_LOCAL_IMAGE_ID' in current or 'TP_THINGSVIS_LOCAL_IMAGE_ID' in os.environ:
+        selection['TP_THINGSVIS_LOCAL_IMAGE_ID'] = local_id
+    if recorded not in ('', policy) or target not in ('', policy):
+        raise RuntimeError('Unknown ThingsVis auth policy; preserve the existing deployment')
+    if recorded and target != policy:
+        raise RuntimeError('A secured ThingsVis deployment cannot silently downgrade its auth policy')
+    if target == policy:
+        if not selected or selected.split('@', 1)[0].endswith(':v1.0.23'):
+            raise RuntimeError('Select the reviewed secure ThingsVis image before upgrading the auth policy')
+        # Prior accept-all SSO could mint signed tokens even with a strong
+        # custom key. No old key is safe to carry across this policy boundary.
+        if not recorded:
+            if 'TP_THINGSVIS_AUTH_SECRET' in os.environ:
+                raise RuntimeError('An exported auth secret would override the rotated .env identity; remove that override before the policy upgrade')
+            values = {'TP_THINGSVIS_AUTH_SECRET': secrets.token_hex(32),
+                      'TP_THINGSVIS_AUTH_POLICY': policy, 'TP_THINGSVIS_AUTH_POLICY_TARGET': policy}
+            values.update(selection)
+            return values
+        if not current.get('TP_THINGSVIS_AUTH_SECRET'):
+            raise RuntimeError('The secured ThingsVis auth identity is missing; preserve the deployment')
+    values = {'TP_THINGSVIS_AUTH_SECRET': deployment_secret(current, 'TP_THINGSVIS_AUTH_SECRET')}
+    values.update(selection)
+    return values
 
 
 def configure():
+    if (ROOT / '.thingspanel-update/journal.json').exists():
+        transaction = update_files().Transaction(ROOT)
+        data = transaction.load()
+        active = data and data['phase'] == 'activation_started' and os.environ.get('TP_INSTALLER_ACTIVE_OPERATION') == data['operation']
+        if not active and (data is None or data['phase'] not in ('complete', 'recovered')):
+            raise RuntimeError('Native preparation requires the active installer operation; preserve unresolved installation state')
     CONFIG.mkdir(parents=True, exist_ok=True)
     envfile = ROOT / '.env'
     text = envfile.read_text(encoding='utf-8') if envfile.exists() else ''
     current = dict(line.split('=', 1) for line in text.splitlines() if '=' in line and not line.startswith('#'))
+    auth_keys = ('TP_THINGSVIS_AUTH_SECRET', 'TP_THINGSVIS_AUTH_POLICY', 'TP_THINGSVIS_AUTH_POLICY_TARGET', 'TP_THINGSVIS_IMAGE', 'TP_THINGSVIS_LOCAL_IMAGE_ID')
+    for key in auth_keys:
+        matches = [line.split('=', 1)[1] for line in text.splitlines()
+                   if '=' in line and line.split('=', 1)[0].strip() == key]
+        if len(matches) > 1:
+            raise RuntimeError('Ambiguous ThingsVis auth configuration; existing configuration was not changed')
+        if matches:
+            current[key] = matches[0]
+    auth = thingsvis_auth_settings(current)
+    integration_keys = ('TP_MARKETINSTALL_PROVIDER_TOKEN', 'TP_MARKETINSTALL_THINGSVIS_IDENTITY_TOKEN',
+                        'TP_MARKETINSTALL_THINGSVIS_TOKEN')
+    integration = {key: deployment_secret(current, key) for key in integration_keys}
+    if len({secret_value(value, key, True) for key, value in integration.items()}) != len(integration):
+        raise RuntimeError('Market installation service credentials must be distinct; existing configuration was not changed')
     defaults = {'TP_DATABASE_PASSWORD': 'postgresThingsPanel', 'TP_NATIVE_DB_PASSWORD': current.get('TP_DATABASE_PASSWORD', 'postgresThingsPanel'),
                 'TP_BROKER_DATABASE_DSN': 'host=postgres user=postgres password=' + current.get('TP_DATABASE_PASSWORD', 'postgresThingsPanel') + ' dbname=ThingsPanel port=5432 sslmode=disable',
                 'TP_JWT_KEY': secrets.token_hex(32), 'TP_AUTOMATION_TOKEN': secrets.token_hex(32),
@@ -134,22 +273,48 @@ def configure():
                 'TP_PROTOCOL_MQTT_USER': 'tp-community-protocols', 'TP_PROTOCOL_MQTT_PASSWORD': secrets.token_hex(32),
                 'TP_DEPLOYMENT_ID': 'community', 'TP_BROKER_CELL': CELL, 'TP_BROKER_INSTANCE': INSTANCE, 'TP_MQTT_CLIENT_ID': CLIENT,
                 'TP_NOTIFICATION_KEYRING_B64': base64.b64encode(json.dumps({'main': base64.b64encode(secrets.token_bytes(32)).decode()}).encode()).decode()}
-    with envfile.open('a', encoding='utf-8') as output:
-        if text and not text.endswith('\n'): output.write('\n')
-        for key, value in defaults.items():
-            if key not in current:
-                output.write(key + '=' + value + '\n')
-                current[key] = value
-    envfile.chmod(0o600)
-    tokenfile = CONFIG / 'plugin-token'
-    if not tokenfile.exists():
-        tokenfile.write_text(secrets.token_hex(32), encoding='ascii')
-    tokenfile.chmod(0o440)
-    if os.name == 'posix' and os.geteuid() == 0: os.chown(tokenfile, 1883, 1883)
-    save('owner-tokens.json', [{'token': tokenfile.read_text().strip(), 'broker_cell': current['TP_BROKER_CELL'], 'broker_instance': current['TP_BROKER_INSTANCE']}], True)
+    defaults.update(auth)
+    defaults.update(integration)
+    lines = text.splitlines()
+    for key, value in defaults.items():
+        if key not in current:
+            lines.append(key + '=' + value)
+            current[key] = value
+        elif key in auth and current[key] != value:
+            lines = [key + '=' + value if '=' in line and line.split('=', 1)[0].strip() == key else line for line in lines]
+            current[key] = value
+    updated = ('\n'.join(lines) + '\n').encode('utf-8')
+    files = update_files()
+    tokenfile = files.safe_target(CONFIG, 'broker/plugin-token')
+    legacy_token = files.safe_target(CONFIG, 'plugin-token')
+    token_source = tokenfile if files.file_info(tokenfile) is not None else legacy_token
+    token = token_source.read_text(encoding='ascii').strip() if files.file_info(token_source) is not None else secrets.token_hex(32)
+    if len(token) < 32 or any(ch.isspace() for ch in token):
+        raise RuntimeError('Existing broker identity is invalid; preserve it for review')
+    services_file = files.safe_target(CONFIG, 'broker/services.json')
+    legacy_services = files.safe_target(CONFIG, 'services.json')
+    services_source = services_file if files.file_info(services_file) is not None else legacy_services
+    initial_services = json.loads(services_source.read_text(encoding='utf-8')) if files.file_info(services_source) is not None else [service(current, [])]
+    if not isinstance(initial_services, list):
+        raise RuntimeError('Existing broker services configuration is invalid; preserve it for review')
+    owners_file = files.safe_target(CONFIG, 'broker/owner-tokens.json')
+    legacy_owners = files.safe_target(CONFIG, 'owner-tokens.json')
+    owners_source = owners_file if files.file_info(owners_file) is not None else legacy_owners
+    owners = json.loads(owners_source.read_text(encoding='utf-8')) if files.file_info(owners_source) is not None else [
+        {'token': token, 'broker_cell': current['TP_BROKER_CELL'], 'broker_instance': current['TP_BROKER_INSTANCE']}]
+    matching = [item for item in owners if isinstance(item, dict) and item.get('token') == token] if isinstance(owners, list) else []
+    if len(matching) != 1 or matching[0].get('broker_cell') != current['TP_BROKER_CELL'] or matching[0].get('broker_instance') != current['TP_BROKER_INSTANCE']:
+        raise RuntimeError('Existing broker owner identity conflicts with configuration; preserve it for review')
+    if updated != text.encode('utf-8'):
+        write_configuration_file(envfile, updated, 0o600)
+    else:
+        envfile.chmod(0o600)
+    token_owner = {'uid': 1883, 'gid': 1883} if os.name == 'posix' and os.geteuid() == 0 else files.file_info(tokenfile)
+    write_configuration_file(tokenfile, token.encode('ascii'), 0o440, token_owner)
+    save('owner-tokens.json', owners, True)
     # An empty initial scope only subscribes; it cannot issue unscoped commands.
-    if not (CONFIG / 'services.json').exists():
-        save('services.json', [service(current, [])], True)
+    if files.file_info(services_file) is None:
+        save('services.json', initial_services, True)
     certificate = CONFIG / 'internal.crt'
     if not certificate.exists():
         command('openssl', 'req', '-x509', '-nodes', '-newkey', 'rsa:2048', '-days', '3650',
@@ -232,10 +397,22 @@ def bootstrap():
     print('Community, Broker and native database migrations are ready.')
 
 
-def pull_images():
+def pull_images(configured=None):
     config = json.loads(command('docker', 'compose', 'config', '--format', 'json'))
+    configured = configured or {}
+    local_id = configured.get('TP_THINGSVIS_LOCAL_IMAGE_ID')
+    local_image = None
+    if local_id:
+        local_image = config['services'].get('thingsvis-server', {}).get('image')
+        if local_image != configured.get('TP_THINGSVIS_IMAGE') or re.fullmatch(r'sha256:[0-9a-f]{64}', local_id) is None:
+            raise RuntimeError('Local ThingsVis image selection does not match the reviewed configuration')
+        if command('docker', 'image', 'inspect', '--format', '{{.Id}}', local_image) != local_id:
+            raise RuntimeError('Local ThingsVis image identity differs; no registry fallback was attempted')
     images = dict.fromkeys(service['image'] for service in config['services'].values())
     for image in images:
+        if image == local_image:
+            print('Using the explicitly selected local ThingsVis image identity.', flush=True)
+            continue
         print('Pulling ' + image, flush=True)
         for attempt in range(3):
             result = subprocess.run(['docker', 'pull', image], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -306,7 +483,7 @@ if __name__ == '__main__':
     check_thingsvis_database(uninterpolated=True)
     env = configure()
     check_thingsvis_database()
-    if args.pull: pull_images()
+    if args.pull: pull_images(env)
     if args.bootstrap: bootstrap()
     if args.refresh_devices: refresh(env)
     if args.verify: verify()

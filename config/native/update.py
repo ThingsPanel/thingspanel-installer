@@ -37,7 +37,10 @@ COMMON = (
     ('config/native/runtime.notification.json', 0o644),
     ('config/native/tick.sh', 0o644), ('config/native/README.md', 0o644),
 )
-WATCHED = ('.env', 'config/native/plugin-token')
+LEGACY_WATCHED = ('.env', 'config/native/plugin-token')
+ACTIVATION_FILES = ('.env', 'config/native/broker/plugin-token',
+                    'config/native/broker/owner-tokens.json', 'config/native/broker/services.json')
+WATCHED = LEGACY_WATCHED + ('config/native/owner-tokens.json', 'config/native/services.json') + ACTIVATION_FILES[1:]
 
 
 def make_directories(path, mode=0o755):
@@ -197,11 +200,14 @@ def command_environment(root):
     return env
 
 
-def run_command(args, root, *, data=None):
+def run_command(args, root, *, data=None, extra_env=None):
+    env = command_environment(root)
+    if extra_env:
+        env.update(extra_env)
     try:
         result = subprocess.run(args, cwd=root, input=data, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, check=False,
-                                env=command_environment(root))
+                                env=env)
     except OSError:
         raise UpdateError('Required installer command could not be started') from None
     if result.returncode:
@@ -361,10 +367,30 @@ class Transaction:
                         raise ValueError()
                 if value['mode'] > 0o7777:
                     raise ValueError()
-            if not isinstance(data['watched'], dict) or set(data['watched']) != set(WATCHED):
+            if not isinstance(data['watched'], dict) or set(data['watched']) not in (set(WATCHED), set(LEGACY_WATCHED)):
                 raise ValueError()
             for value in data['watched'].values():
                 fingerprint(value, nullable=True)
+            activation_files = data.get('activation_files', {})
+            if not isinstance(activation_files, dict) or any(p not in ACTIVATION_FILES for p in activation_files):
+                raise ValueError()
+            if activation_files and data['phase'] not in ('activation_started', 'complete'):
+                raise ValueError()
+            activation_dirs = data.get('activation_dirs', [])
+            if not isinstance(activation_dirs, list) or len(activation_dirs) != len(set(activation_dirs)) or any(p not in ('config', 'config/native', 'config/native/broker') for p in activation_dirs):
+                raise ValueError()
+            if activation_dirs and data['phase'] not in ('activation_started', 'complete'):
+                raise ValueError()
+            for relative, entry in activation_files.items():
+                if not isinstance(entry, dict) or set(entry) != {'old', 'new', 'applied'} or type(entry['applied']) is not bool:
+                    raise ValueError()
+                fingerprint(entry['old'], nullable=True)
+                fingerprint(entry['new'])
+                if relative not in data['watched'] or entry['old'] != data['watched'][relative]:
+                    raise ValueError()
+                if data['phase'] == 'complete' and not entry['applied']:
+                    raise ValueError()
+                safe_target(self.root, relative)
             if not isinstance(data['created_dirs'], list) or any(p not in ('config', 'config/native') for p in data['created_dirs']):
                 raise ValueError()
             if len(data['created_dirs']) != len(set(data['created_dirs'])):
@@ -552,6 +578,58 @@ class Transaction:
         data['phase'] = 'recovered'
         self.save(data)
 
+    def write_activation_environment(self, content):
+        self.write_activation_file('.env', content, 0o600)
+
+    def write_activation_file(self, relative, content, mode, ownership=None):
+        """Journal the native .env effect; never infer service/DB rollback.
+
+        The formal entrypoint holds update_lock while its prepare child uses
+        this method. Before activation .env remains a watched input. During
+        activation its original backup and intended new bytes are recorded in
+        the same private transaction before the atomic target replacement.
+        """
+        data = self.load()
+        if data is None or data['phase'] != 'activation_started' or relative not in ACTIVATION_FILES or relative not in data['watched']:
+            raise UpdateError('Configuration changes require the active installation journal and a known file')
+        target = safe_target(self.root, relative)
+        actual = file_info(target)
+        prior = data.get('activation_files', {}).get(relative)
+        if prior is not None:
+            if not prior['applied'] or not same(actual, prior['new']):
+                raise UpdateError('Previous configuration activation is unresolved; preserve the journal')
+        elif not same(actual, data['watched'][relative]):
+            raise UpdateError('Configuration changed before native activation')
+        original = data['watched'][relative]
+        directory = self.state / data['operation']
+        backup = directory / 'backup' / relative
+        if prior is None and original is not None:
+            durable_bytes(backup, target.read_bytes(), original['mode'], original)
+        if original is not None and not same(file_info(backup), original):
+            raise UpdateError('Configuration activation backup is missing or changed')
+        staged = directory / 'stage' / relative
+        owner = ownership if ownership is not None else original
+        durable_bytes(staged, content, mode, owner)
+        entry = {'old': original, 'new': file_info(staged), 'applied': False}
+        data.setdefault('activation_files', {})[relative] = entry
+        missing = []
+        parent = target.parent
+        while parent != self.root and not parent.exists():
+            missing.append(parent.relative_to(self.root).as_posix())
+            parent = parent.parent
+        for path in reversed(missing):
+            if path not in data.setdefault('activation_dirs', []):
+                data['activation_dirs'].append(path)
+        self.save(data)
+        self.checkpoint('activation-env-prepared' if relative == '.env' else 'activation-file-prepared:' + relative)
+        expected = prior['new'] if prior is not None else original
+        if not same(file_info(target), expected) or not same(file_info(staged), entry['new']):
+            raise UpdateError('Configuration changed during native activation')
+        durable_bytes(target, staged.read_bytes(), mode, owner)
+        self.checkpoint('activation-env-written' if relative == '.env' else 'activation-file-written:' + relative)
+        entry['applied'] = True
+        self.save(data)
+
     def run(self, source, *, expected_version='', activate=None, recovery_only=False):
         with update_lock(self.state):
             old = self.load()
@@ -571,6 +649,12 @@ class Transaction:
                     self.save(data)
                     self.checkpoint('activation_started')
                     activate(self.root)
+                    # Native preparation records its .env effect in this same
+                    # journal. Preserve it when committing the outer result.
+                    activated = self.load()
+                    if activated is None or activated['operation'] != data['operation'] or activated['phase'] != 'activation_started':
+                        raise UpdateError('Activation journal changed unexpectedly')
+                    data = activated
                 data['phase'] = 'complete'
                 self.save(data)
             except BaseException:
@@ -582,8 +666,16 @@ class Transaction:
 def activate_native(root):
     """Existing native entry point, after commit, under the same process lock."""
     prepare = [sys.executable, str(root / 'config/native/prepare.py')]
+    current = Transaction(root).load()
+    if current is None or current['phase'] != 'activation_started':
+        raise UpdateError('Native activation requires its persistent operation')
+    context = {'TP_INSTALLER_ACTIVE_OPERATION': current['operation']}
+
+    def native(*args):
+        return run_command(prepare + list(args), root, extra_env=context)
+
     print('Preparing native configuration (configuration rollback ends here).', flush=True)
-    run_command(prepare, root)
+    native()
     archive = root / 'images.tar'
     parts = sorted(root.glob('images.tar.part-*'))
     loaded = False
@@ -611,11 +703,11 @@ def activate_native(root):
             print('Offline image load failed; trying the configured registry.', flush=True)
     if not loaded:
         print('Pulling the selected component images.', flush=True)
-        run_command(prepare + ['--pull'], root)
+        native('--pull')
     print('Applying the existing native migration and service preparation.', flush=True)
-    run_command(prepare + ['--bootstrap', '--refresh-devices'], root)
+    native('--bootstrap', '--refresh-devices')
     run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], root)
-    run_command(prepare + ['--verify'], root)
+    native('--verify')
 
 
 def main():

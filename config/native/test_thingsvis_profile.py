@@ -48,7 +48,8 @@ class ThingsVisDatabaseGuardTest(unittest.TestCase):
         for key in ('TP_AUTOMATION_TOKEN', 'TP_MQTT_USER', 'TP_MQTT_PASSWORD',
                     'TP_JWT_KEY', 'TP_BROKER_DATABASE_DSN', 'TP_NATIVE_DB_PASSWORD',
                     'TP_PROTOCOL_MQTT_USER', 'TP_PROTOCOL_MQTT_PASSWORD',
-                    'TP_NOTIFICATION_KEYRING_B64'):
+                    'TP_NOTIFICATION_KEYRING_B64', 'TP_THINGSVIS_AUTH_SECRET', 'TP_MARKETINSTALL_PROVIDER_TOKEN',
+                    'TP_MARKETINSTALL_THINGSVIS_IDENTITY_TOKEN', 'TP_MARKETINSTALL_THINGSVIS_TOKEN'):
             env[key] = 'synthetic-test-value'
         resolved = subprocess.run(['docker', 'compose', '-f', str(root / 'docker-compose.yml'),
                                    'config', '--format', 'json'], check=True, capture_output=True, text=True, env=env)

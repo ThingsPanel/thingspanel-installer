@@ -43,3 +43,19 @@ python C:\reviewed-installer\config\native\update.py --root C:\ThingsPanel --rec
 恢复前先检查整个文件组。当前文件只允许与记录中的旧版本或新版本完全一致；一旦发现人工修改、符号链接、损坏 journal、缺失或变化的备份，停止恢复并保留现场，不自动覆盖第三方内容。原来不存在的文件只在内容/模式与本次写入一致时删除；新增目录只尝试删除空目录，不递归清理。恢复本身再次被中断，也可再次执行同一命令。
 
 `.thingspanel-update` 可能含旧配置与凭据，不得提交、公开上传或作为无脱敏附件发送。本实现不自动清理历史操作备份，以免删除故障恢复证据；已完成记录的保留期管理另行处理。支持范围是本机文件系统上的单安装目录；不得假定网络共享目录或存储设备掉电行为等同于本机文件系统。Windows 代码使用系统文件锁和写穿替换，但本轮 Linux 测试不构成 Windows/NTFS 或真实 PowerShell 安装验收。
+
+## ThingsVis 身份与 activation 的 `.env` 记录
+
+`prepare.py` 为部署生成并持久保留 `TP_THINGSVIS_AUTH_SECRET`，以及三份相互独立的安装 provider、ThingsVis identity、ThingsVis import 服务凭证。重复 prepare 和通常升级复用已保存值；环境覆盖与已有服务凭证不一致时拒绝，不打印凭据。broker 的只读 JSON 使用同一 updater 的原子替换工具写入，避免非 root 的第二次 prepare 因旧文件为 `0440` 而失败。
+
+安全 SSO 切换必须由发布负责人显式选择 `TP_THINGSVIS_IMAGE` 并设置 `TP_THINGSVIS_AUTH_POLICY_TARGET=verified-sso-v1`，所选制品需对应已验收的源码和镜像锁。默认 `v1.0.23` 不能取得此标记。首次跨越该策略边界会轮换 AUTH_SECRET，即使旧值很强也不能复用，因为旧 accept-all SSO 可以签发不可信会话；用户需重新登录。新 secret 与 `TP_THINGSVIS_AUTH_POLICY=verified-sso-v1` 同一次原子 `.env` 写入，之后重复运行保留该身份。未知 policy、丢失的已受保护身份及隐式策略降级均拒绝。
+
+标记仅记录该次配置意图，不证明容器已经切换。`.env` 在配置 commit 前仍是不可修改的 watched input；activation 时，同一个 journal 的 `activation_files` 先记录原 `.env` 备份、原/新摘要和未完成意图，再原子替换，最后记录 `applied`。完成外层事务会保留这份回执。若意图或文件替换后进程被杀，journal 仍为 `activation_started`，恢复会要求核对实际服务，不猜测旧/新 secret 哪个已生效，也不自动还原数据库或会话状态。
+
+broker 的 `plugin-token`、`owner-tokens.json`、`services.json` 迁入最小专属目录 `config/native/broker`，Compose 只将该目录挂到 `/run/secrets`。逐文件 bind mount 会固定旧 inode，而目录挂载允许原子替换后的新文件被再次打开读取。首次迁移保留旧 token、owner 列表与 services 数据，旧路径文件保持原样；身份不一致时拒绝。三份新文件的原不存在状态、旧/新摘要和新建目录意图同样进入 `activation_files` / `activation_dirs`。旧容器须由同一正式 Compose 变更受控重建；配置生成成功不等于原进程已经采用新挂载。
+
+只有当前持锁 updater 传入相同操作标识的 prepare 子进程可继续 activation；普通 prepare 不能以内容已经相同为由绕过未知安装状态。该标识用于本机进程关联，不是远端身份或安全围栏。已完成安装之后，原有显式 `--refresh-devices` 仍可在同一内核锁下原子更新 `broker/services.json` 这一资源投影；它不更换身份、不重开安装操作、不把未知安装改成成功。
+
+`TP_THINGSVIS_IMAGE` 支持隔离验收使用的本地镜像选择；本机 image ID 不是远程 registry manifest digest。当前 formal release 仍缺少具有独立信任根的整组签名 manifest；仅 HTTPS 和 updater hash 不证明全部 payload 的发布身份。旧已安装入口对 updater 的固定 pin 也不会自动授权不同字节的新 updater。此类跨 updater 版本升级必须经已审阅的新 bootstrap 或补齐正式签名发布协议，不能以放宽 hash 检查自动重试。
+
+隔离环境使用已有本地制品时，另设置 `TP_THINGSVIS_LOCAL_IMAGE_ID` 为完整 Docker `sha256:...` image ID。native pull 先核对该 ID 与 Compose 实际选择一致，然后只对这一 ThingsVis 镜像跳过 registry pull；其他组件保持原规则。ID 不符或镜像缺失立即失败，不回退下载另一个版本。生产 registry 引用应使用发布清单对应的远程摘要，不能把本机 image ID 填成 registry digest。

@@ -38,12 +38,19 @@ if args and args[0] == 'compose' and 'config' in args:
 sys.exit(93)
 '''
 CURL = r'''#!/usr/bin/env python3
-import os, pathlib, sys
+import json, os, pathlib, sys
+from urllib.parse import urlsplit
 root = pathlib.Path(os.environ['TP_FIXTURE_ROOT']).resolve()
 count_file = root / 'curl-count'
 count = int(count_file.read_text()) + 1 if count_file.exists() else 1
 count_file.write_text(str(count))
 args = sys.argv[1:]
+urls = [arg for arg in args if arg.startswith('https://')]
+if len(urls) != 1: sys.exit(96)
+url = urlsplit(urls[0])
+if url.scheme != 'https' or url.netloc != 'install.thingspanel.io': sys.exit(97)
+with (root / 'curl-events.jsonl').open('a') as stream:
+    stream.write(json.dumps({'call': count, 'path': url.path.lstrip('/')}) + '\n')
 try: dest = pathlib.Path(args[args.index('-o') + 1]).resolve()
 except (ValueError, IndexError): sys.exit(94)
 try: dest.relative_to(root)
@@ -90,6 +97,10 @@ class DownloadFailurePreservation(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, 'injected download failure unexpectedly succeeded')
             self.assertTrue((root / 'curl-count').exists(), 'entry did not reach the injected download boundary')
             self.assertEqual(int((root / 'curl-count').read_text()), failed_call, 'wrong boundary reached')
+            events = [json.loads(line) for line in (root / 'curl-events.jsonl').read_text().splitlines()]
+            expected = ['config/native/update.py'] if bootstrap is not None else list(FILES[:failed_call])
+            self.assertEqual(events, [{'call': index + 1, 'path': path} for index, path in enumerate(expected)],
+                             'failure did not reach the intended payload URL sequence')
             for filename, original in OLD.items():
                 path = target / filename
                 self.assertTrue(path.is_file(), f'{filename} disappeared')

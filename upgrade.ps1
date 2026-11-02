@@ -27,12 +27,46 @@ $ErrorActionPreference = "Stop"
 
 $REPO     = "ThingsPanel/thingspanel-installer"
 $RAW_BASE = "https://install.thingspanel.io"
+$UPDATE_ENGINE_SHA256 = "b50a1640df02a50a8ac6c2bdcb46edba59d88f2afbbd490a19190da23be938d3"
 
 function Write-Info    ($m) { Write-Host "[INFO]  $m" -ForegroundColor Cyan }
 function Write-Success ($m) { Write-Host "[OK]    $m" -ForegroundColor Green }
 function Write-Warn    ($m) { Write-Host "[WARN]  $m" -ForegroundColor Yellow }
 function Write-Step    ($m) { Write-Host "`n[>>] $m" -ForegroundColor White -BackgroundColor DarkBlue }
 function Write-Err     ($m) { Write-Host "[ERROR] $m" -ForegroundColor Red; throw $m }
+
+function Invoke-SafeUpdate($Directory, $ExpectedVersion) {
+    $python = Get-Command python3 -ErrorAction SilentlyContinue
+    $pythonArgs = @()
+    if (-not $python) { $python = Get-Command python -ErrorAction SilentlyContinue }
+    if (-not $python) { $python = Get-Command py -ErrorAction SilentlyContinue; $pythonArgs = @('-3') }
+    if (-not $python) { throw 'Python 3 is required; existing configuration was not changed.' }
+    & $python.Source @pythonArgs -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)'
+    if ($LASTEXITCODE -ne 0) { throw 'Python 3.8 or newer is required.' }
+    $engine = Join-Path $Directory 'config/native/update.py'
+    if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'config/native/update.py'))) {
+        $engine = Join-Path $PSScriptRoot 'config/native/update.py'
+    }
+    $temporary = $null
+    try {
+        if (-not (Test-Path -LiteralPath $engine) -or (Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash.ToLowerInvariant() -ne $UPDATE_ENGINE_SHA256) {
+            $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ('thingspanel-updater-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $temporary | Out-Null
+            $engine = Join-Path $temporary 'update.py'
+            $client = New-Object System.Net.WebClient
+            try { $client.DownloadFile("$RAW_BASE/config/native/update.py", $engine) } finally { $client.Dispose() }
+            if ((Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash.ToLowerInvariant() -ne $UPDATE_ENGINE_SHA256) {
+                throw 'Updater digest mismatch; existing configuration was not changed.'
+            }
+        }
+        $arguments = $pythonArgs + @($engine, '--root', $Directory, '--base-url', $RAW_BASE)
+        if ($ExpectedVersion) { $arguments += @('--expected-version', $ExpectedVersion) }
+        & $python.Source @arguments
+        if ($LASTEXITCODE -ne 0) { throw 'Upgrade did not complete. Preserve .thingspanel-update for recovery.' }
+    } finally {
+        if ($temporary) { Remove-Item -LiteralPath $temporary -Recurse -Force }
+    }
+}
 
 function Test-ExistingThingsVisDatabase($Directory) {
     if (-not (Test-Path (Join-Path $Directory 'docker-compose.yml'))) { return $true }
@@ -108,28 +142,6 @@ if (-not $TargetVersion) {
 }
 Write-Info "Target version: $TargetVersion"
 
-Write-Step "Backing up config"
-$backup = "$ComposeFile.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
-Copy-Item $ComposeFile $backup
-Write-Success "Backed up to: $backup"
-
-Write-Step "Downloading new config"
-$client = New-Object System.Net.WebClient
-$client.Headers.Add("User-Agent", "ThingsPanel-Upgrader")
-$client.DownloadFile("$RAW_BASE/docker-compose.yml", "$ComposeFile")
-$client.DownloadFile("$RAW_BASE/upgrade.ps1", "$InstallDir\upgrade.ps1")
-$client.DownloadFile("$RAW_BASE/uninstall.ps1", "$InstallDir\uninstall.ps1")
-Write-Success "Config files updated"
-
-Write-Step "Pulling new images"
-docker compose pull --quiet
-if ($LASTEXITCODE -ne 0) { Write-Err "Image pull failed" }
-Write-Success "Images pulled"
-
-Write-Step "Restarting services"
-Set-Location $InstallDir
-docker compose up -d --wait --timeout 180
-if ($LASTEXITCODE -ne 0) {
-    Write-Err "Failed to start. View logs: docker compose -f `"$ComposeFile`" logs"
-}
+Write-Step "Staging and validating the complete installer payload"
+Invoke-SafeUpdate $InstallDir $TargetVersion
 Write-Success "Upgrade complete! Version: $TargetVersion"

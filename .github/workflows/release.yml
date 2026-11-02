@@ -18,6 +18,9 @@ concurrency:
 
 jobs:
 
+  update-transaction:
+    uses: ./.github/workflows/update-transaction.yml
+
   # ── 确定版本号 ──────────────────────────────────────────────────────────────
   prepare:
     runs-on: ubuntu-latest
@@ -81,7 +84,7 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
-    needs: [prepare, validate]
+    needs: [prepare, validate, update-transaction]
     steps:
       - uses: actions/checkout@v4
 
@@ -117,7 +120,7 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
-    needs: [prepare, validate]
+    needs: [prepare, validate, update-transaction]
     steps:
       - uses: actions/checkout@v4
 

@@ -19,6 +19,7 @@ MQTT_PORT="${MQTT_PORT:-1883}"
 MIN_DOCKER_VERSION="20.10"
 MIN_COMPOSE_VERSION="2.0"
 SUDO_CMD=""
+UPDATE_ENGINE_SHA256="b50a1640df02a50a8ac6c2bdcb46edba59d88f2afbbd490a19190da23be938d3"
 
 # ── 颜色输出 ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
@@ -146,25 +147,47 @@ ensure_install_dir_access() {
     success "已获得安装目录写入权限"
 }
 
-download_file() {
-    local url="$1"
-    local target="$2"
-    local mode="$3"
-    local tmp_file
-
-    tmp_file="$(mktemp "${TMPDIR:-/tmp}/thingspanel.XXXXXX")"
-
-    if command_exists curl; then
-        curl -fsSL "$url" -o "$tmp_file"
-    elif command_exists wget; then
-        wget -qO "$tmp_file" "$url"
-    else
-        rm -f "$tmp_file"
-        error "未找到 curl 或 wget，无法下载安装文件"
+run_safe_update() {
+    command_exists python3 || error "安装需要 Python 3；现有配置未修改。"
+    python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' || error "安装需要 Python 3.8 或更新版本；现有配置未修改。"
+    local engine="" temporary="" candidate="" directory=""
+    if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+        directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        candidate="$directory/config/native/update.py"
     fi
-
-    run_privileged install -m "$mode" "$tmp_file" "$target"
-    rm -f "$tmp_file"
+    if [ -n "$candidate" ] && [ -f "$candidate" ] && python3 - "$candidate" "$UPDATE_ENGINE_SHA256" <<'PY'
+import hashlib, pathlib, sys
+sys.exit(0 if hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() == sys.argv[2] else 1)
+PY
+    then
+        engine="$candidate"
+    else
+        temporary="$(mktemp -d "${TMPDIR:-/tmp}/thingspanel-updater.XXXXXX")"
+        engine="$temporary/update.py"
+        if command_exists curl; then
+            curl -fsSL --connect-timeout 15 --max-time 180 "$RAW_BASE/config/native/update.py" -o "$engine" || { rm -rf "$temporary"; error "更新器下载失败；现有配置未修改。"; }
+        elif command_exists wget; then
+            wget -q --timeout=180 -O "$engine" "$RAW_BASE/config/native/update.py" || { rm -rf "$temporary"; error "更新器下载失败；现有配置未修改。"; }
+        else
+            rm -rf "$temporary"
+            error "需要 curl 或 wget；现有配置未修改。"
+        fi
+        if ! python3 - "$engine" "$UPDATE_ENGINE_SHA256" <<'PY'
+import hashlib, pathlib, sys
+sys.exit(0 if hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() == sys.argv[2] else 1)
+PY
+        then
+            rm -rf "$temporary"
+            error "更新器内容与本入口固定摘要不一致；现有配置未修改。"
+        fi
+    fi
+    local args=(python3 "$engine" --root "$INSTALL_DIR" --base-url "$RAW_BASE")
+    if [ -n "${TP_VERSION:-}" ]; then args+=(--expected-version "$TP_VERSION"); fi
+    if ! run_privileged "${args[@]}"; then
+        [ -z "$temporary" ] || rm -rf "$temporary"
+        error "安装未完成；请保留 .thingspanel-update 中的恢复记录。"
+    fi
+    [ -z "$temporary" ] || rm -rf "$temporary"
 }
 
 # ── Banner ────────────────────────────────────────────────────────────────────
@@ -249,82 +272,11 @@ check_memory() {
     fi
 }
 
-# ── 确定版本 ──────────────────────────────────────────────────────────────────
-resolve_version() {
-    step "确定安装版本"
-    VERSION=$(python3 -c 'import json,subprocess; c=json.loads(subprocess.check_output(["docker","compose","-f",__import__("sys").argv[1],"config","--format","json"])); print(c["services"]["backend"]["image"].rsplit(":",1)[1])' "${INSTALL_DIR}/docker-compose.yml")
-    if [ -n "${TP_VERSION:-}" ] && [ "$TP_VERSION" != "$VERSION" ]; then
-        error "指定版本与当前部署配置不一致：$TP_VERSION / $VERSION"
-    fi
-    success "将安装版本: $VERSION"
-
-}
-
 # ── 创建目录结构 ───────────────────────────────────────────────────────────────
 setup_directories() {
     step "创建目录结构"
     run_privileged mkdir -p "$INSTALL_DIR"
     success "目录: $INSTALL_DIR"
-}
-
-# ── 下载 docker-compose.yml ────────────────────────────────────────────────────
-download_docker_compose() {
-    step "下载 docker-compose.yml"
-    local compose_url="${RAW_BASE}/docker-compose.yml"
-
-    download_file "$compose_url" "${INSTALL_DIR}/docker-compose.yml" "0644"
-    mkdir -p "${INSTALL_DIR}/config/native"
-    download_file "${RAW_BASE}/niginx.conf" "${INSTALL_DIR}/niginx.conf" "0644"
-    for native_file in prepare.py runtime.encore.json runtime.notification.json tick.sh README.md; do
-        download_file "${RAW_BASE}/config/native/${native_file}" "${INSTALL_DIR}/config/native/${native_file}" "0644"
-    done
-    command_exists python3 || error "v1.3.0 原生配置准备需要 Python 3，请安装后重试"
-    python3 "${INSTALL_DIR}/config/native/prepare.py"
-    success "配置文件已下载到 $INSTALL_DIR"
-}
-
-# ── 下载管理脚本 ────────────────────────────────────────────────────────────────
-download_management_scripts() {
-    step "下载管理脚本"
-    for script in upgrade.sh uninstall.sh; do
-        download_file "${RAW_BASE}/${script}" "${INSTALL_DIR}/${script}" "0755"
-    done
-    success "管理脚本已就绪"
-}
-
-# ── 启动服务 ──────────────────────────────────────────────────────────────────
-start_services() {
-    step "启动 ThingsPanel 服务"
-    cd "$INSTALL_DIR"
-
-    if [ -f "$INSTALL_DIR/images.tar" ]; then
-        info "发现本地离线镜像 images.tar，正在加载（这可能需要几分钟）..."
-        docker load -i "$INSTALL_DIR/images.tar" || warn "镜像加载失败，将尝试在线拉取"
-        success "离线镜像已加载"
-    elif ls "$INSTALL_DIR"/images.tar.part-* >/dev/null 2>&1; then
-        info "发现本地离线镜像分片 images.tar.part-*，正在加载（这可能需要几分钟）..."
-        cat "$INSTALL_DIR"/images.tar.part-* | docker load || warn "镜像加载失败，将尝试在线拉取"
-        success "离线镜像分片已加载"
-    else
-        info "拉取镜像（首次可能需要 3-5 分钟，取决于网速）..."
-        python3 "${INSTALL_DIR}/config/native/prepare.py" --pull
-    fi
-
-    info "准备数据库和服务配置..."
-    python3 "${INSTALL_DIR}/config/native/prepare.py" --bootstrap --refresh-devices
-
-    info "启动服务，等待健康检查通过..."
-    if ! docker compose up -d --wait --wait-timeout 240 2>&1; then
-        error "启动失败，请运行以下命令查看日志：\n  docker compose -f ${INSTALL_DIR}/docker-compose.yml logs"
-    fi
-    success "所有服务已启动"
-}
-
-# ── 验证安装 ──────────────────────────────────────────────────────────────────
-verify_installation() {
-    step "验证安装"
-    python3 "${INSTALL_DIR}/config/native/prepare.py" --verify
-
 }
 
 # ── 安装完成提示 ───────────────────────────────────────────────────────────────
@@ -357,11 +309,7 @@ main() {
     check_memory
     ensure_install_dir_access
     setup_directories
-    download_docker_compose
-    resolve_version
-    download_management_scripts
-    start_services
-    verify_installation
+    run_safe_update
     print_success
 }
 

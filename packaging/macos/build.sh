@@ -13,11 +13,10 @@ FINAL_PKG="$DIST_DIR/ThingsPanel-${VERSION}.pkg"
 rm -rf "$BUILD_DIR"
 mkdir -p "$PAYLOAD_DIR/opt/thingspanel" "$DIST_DIR"
 
-cp "$ROOT_DIR/docker-compose.yml" "$PAYLOAD_DIR/opt/thingspanel/"
+# Configuration and management scripts are committed by update.py only.
+# A pkg payload must not overwrite them before the transaction acquires its lock.
 cp "$ROOT_DIR/install.sh" "$PAYLOAD_DIR/opt/thingspanel/"
 cp "$ROOT_DIR/install.bash" "$PAYLOAD_DIR/opt/thingspanel/"
-cp "$ROOT_DIR/upgrade.sh" "$PAYLOAD_DIR/opt/thingspanel/"
-cp "$ROOT_DIR/uninstall.sh" "$PAYLOAD_DIR/opt/thingspanel/"
 chmod +x "$PAYLOAD_DIR/opt/thingspanel/"*.sh "$SCRIPT_DIR/scripts/"*
 
 pkgbuild \

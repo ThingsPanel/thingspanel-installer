@@ -9,6 +9,7 @@ set -euo pipefail
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="ThingsPanel/thingspanel-installer"
 RAW_BASE="https://install.thingspanel.io"
+UPDATE_ENGINE_SHA256="b50a1640df02a50a8ac6c2bdcb46edba59d88f2afbbd490a19190da23be938d3"
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -18,6 +19,43 @@ success() { echo -e "${GREEN}[OK]${RESET}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; exit 1; }
 step()    { echo -e "\n${BOLD}▶ $*${RESET}"; }
+
+run_safe_update() {
+    command -v python3 >/dev/null 2>&1 || error "升级需要 Python 3；现有配置未修改。"
+    python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' || error "升级需要 Python 3.8 或更新版本；现有配置未修改。"
+    local engine="$INSTALL_DIR/config/native/update.py" temporary=""
+    if [ -f "$engine" ] && python3 - "$engine" "$UPDATE_ENGINE_SHA256" <<'PY'
+import hashlib, pathlib, sys
+sys.exit(0 if hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() == sys.argv[2] else 1)
+PY
+    then
+        :
+    else
+        temporary="$(mktemp -d "${TMPDIR:-/tmp}/thingspanel-updater.XXXXXX")"
+        engine="$temporary/update.py"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --connect-timeout 15 --max-time 180 "$RAW_BASE/config/native/update.py" -o "$engine" || { rm -rf "$temporary"; error "更新器下载失败；现有配置未修改。"; }
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --timeout=180 -O "$engine" "$RAW_BASE/config/native/update.py" || { rm -rf "$temporary"; error "更新器下载失败；现有配置未修改。"; }
+        else
+            rm -rf "$temporary"
+            error "需要 curl 或 wget；现有配置未修改。"
+        fi
+        if ! python3 - "$engine" "$UPDATE_ENGINE_SHA256" <<'PY'
+import hashlib, pathlib, sys
+sys.exit(0 if hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() == sys.argv[2] else 1)
+PY
+        then
+            rm -rf "$temporary"
+            error "更新器内容与本入口固定摘要不一致；现有配置未修改。"
+        fi
+    fi
+    if ! python3 "$engine" --root "$INSTALL_DIR" --base-url "$RAW_BASE" --expected-version "$TARGET_VERSION"; then
+        [ -z "$temporary" ] || rm -rf "$temporary"
+        error "升级未完成；请保留 .thingspanel-update 中的恢复记录。"
+    fi
+    [ -z "$temporary" ] || rm -rf "$temporary"
+}
 
 check_existing_thingsvis_database() {
     command -v python3 >/dev/null 2>&1 || error "检查已有安装的数据源需要 Python 3；旧配置未修改。"
@@ -88,34 +126,8 @@ main() {
     fi
     info "目标版本: $TARGET_VERSION"
 
-    step "备份配置文件"
-    if [ -f "${INSTALL_DIR}/docker-compose.yml" ]; then
-        cp "${INSTALL_DIR}/docker-compose.yml" "${INSTALL_DIR}/docker-compose.yml.bak.$(date +%Y%m%d%H%M%S)"
-    fi
-    success "已备份"
-
-    step "更新配置文件"
-    curl -fsSL "${RAW_BASE}/docker-compose.yml" -o "${INSTALL_DIR}/docker-compose.yml"
-    mkdir -p "${INSTALL_DIR}/config/native"
-    curl -fsSL "${RAW_BASE}/niginx.conf" -o "${INSTALL_DIR}/niginx.conf"
-    for native_file in prepare.py runtime.encore.json runtime.notification.json tick.sh README.md; do
-        curl -fsSL "${RAW_BASE}/config/native/${native_file}" -o "${INSTALL_DIR}/config/native/${native_file}"
-    done
-    command -v python3 >/dev/null 2>&1 || error "v1.3.0 原生配置准备需要 Python 3"
-    python3 "${INSTALL_DIR}/config/native/prepare.py"
-    success "配置文件已更新"
-
-    step "拉取新镜像"
-    cd "$INSTALL_DIR"
-    python3 "${INSTALL_DIR}/config/native/prepare.py" --pull
-    success "镜像拉取完成"
-
-    step "准备数据库和服务配置"
-    python3 "${INSTALL_DIR}/config/native/prepare.py" --bootstrap --refresh-devices
-
-    step "重启服务"
-    docker compose up -d --wait --wait-timeout 240
-    python3 "${INSTALL_DIR}/config/native/prepare.py" --verify
+    step "暂存并验证完整配置，随后在同一锁内升级"
+    run_safe_update
     success "升级完成！当前版本: $TARGET_VERSION"
 
     echo ""

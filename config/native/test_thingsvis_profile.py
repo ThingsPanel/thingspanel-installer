@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import shlex
@@ -17,7 +18,12 @@ spec.loader.exec_module(prepare)
 
 class ThingsVisDatabaseGuardTest(unittest.TestCase):
     def configuration(self, url):
-        return {'services': {'thingsvis-server': {'environment': {'DATABASE_URL': url}}}}
+        # The existing entry guards now require both platform and ThingsVis
+        # datasource evidence. A ThingsVis-only fixture is unknown, not PG.
+        return {'services': {'thingsvis-server': {'environment': {'DATABASE_URL': url}},
+                'backend': {'environment': {'GOTP_DB_PSQL_HOST': 'postgres',
+                'GOTP_DB_PSQL_PORT': '5432', 'GOTP_DB_PSQL_USERNAME': 'postgres',
+                'GOTP_DB_PSQL_DBNAME': 'ThingsPanel'}}, 'postgres': {}}}
 
     def test_postgresql_schemes_are_allowed(self):
         for url in ('postgres://example/db', 'postgresql://example/db?schema=thingsvis'):
@@ -116,9 +122,10 @@ class ThingsVisDatabaseGuardTest(unittest.TestCase):
         for tag in ('v1.1.13.6', 'v1.2.12.1'):
             original = subprocess.run(['git', '-C', str(repo), 'show', tag + ':docker-compose.yml'],
                                       check=True, capture_output=True, text=True).stdout
-            self.assertIn('DATABASE_URL=postgresql://', original)
+            url_pattern = r'(DATABASE_URL\s*(?:=|:\s*))postgresql://'
+            self.assertRegex(original, url_pattern)
             for scheme in ('postgresql', 'mysql'):
-                content = original.replace('DATABASE_URL=postgresql://', 'DATABASE_URL=' + scheme + '://')
+                content = re.sub(url_pattern, lambda match: match.group(1) + scheme + '://', original)
                 for entry in ('install.bash', 'upgrade.sh'):
                     with self.subTest(tag=tag, scheme=scheme, entry=entry), tempfile.TemporaryDirectory(prefix='tp-history-guard-') as directory:
                         root = Path(directory)
@@ -142,6 +149,8 @@ class ThingsVisDatabaseGuardTest(unittest.TestCase):
                         env.pop('COMPOSE_FILE', None)
                         env.update(PATH=str(bin_dir) + os.pathsep + env['PATH'], INSTALL_DIR=str(root), TMPDIR=str(root),
                                    POSTGRES_PASSWORD='synthetic-test-password', TP_TEST_CURL_LOG=str(root / 'curl.log'))
+                        for required in re.findall(r'\$\{([A-Z0-9_]+):\?', content):
+                            env[required] = 'synthetic-test-value'
                         args = ['bash', str(script)] + (['v-test'] if entry == 'upgrade.sh' else [])
                         result = subprocess.run(args, env=env, cwd=root, capture_output=True, text=True, timeout=30)
                         self.assertNotEqual(result.returncode, 0)

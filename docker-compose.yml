@@ -345,6 +345,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      backend:
+        condition: service_healthy
+        restart: true
   automation-scheduler:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.3.0
     entrypoint:

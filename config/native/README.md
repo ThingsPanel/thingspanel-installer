@@ -20,8 +20,12 @@ HTTP/Modbus 使用安装时生成的独立协议服务账号。新装没有设�
 
 ```sh
 python3 config/native/prepare.py --refresh-devices
-docker compose restart broker-owner mosquitto backend http_adapter modbus_service
+docker compose restart broker-owner
+docker compose restart mosquitto
+docker compose restart backend http_adapter modbus_service frontend
 ```
+
+先重启 broker-owner,再重启 mosquitto(它与 broker-owner 共用网络);同一条命令里一起重启会让 mosquitto 退出。重启 backend 后要同时重启 frontend,否则前端的反向代理仍指向旧地址并返回 502。
 
 单个服务允许列表最多 256 个设备；超出需规划独立服务身份。以上是当前 Broker 的设备范围管理要求，不是安装步骤。
 

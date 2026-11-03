@@ -679,6 +679,25 @@ class Transaction:
         entry['applied'] = True
         self.save(data)
 
+    def reconcile_activation(self):
+        """Resume an unresolved activation only by re-running its idempotent tail.
+
+        The journal stays ``activation_started`` unless services come up and
+        native verification passes; nothing is rolled back or re-applied.
+        """
+        with update_lock(self.state):
+            data = self.load()
+            if data is None or data['phase'] != 'activation_started':
+                raise UpdateError('There is no unresolved activation to reconcile')
+            for relative, entry in data.get('activation_files', {}).items():
+                if not entry['applied'] or not same(file_info(safe_target(self.root, relative)), entry['new']):
+                    raise UpdateError('Activation configuration is not in its recorded state; manual review is required: ' + relative)
+            run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], self.root)
+            run_command([sys.executable, str(self.root / 'config/native/prepare.py'), '--verify'], self.root,
+                        extra_env={'TP_INSTALLER_ACTIVE_OPERATION': data['operation']})
+            data['phase'] = 'complete'
+            self.save(data)
+
     def run(self, source, *, expected_version='', activate=None, recovery_only=False):
         with update_lock(self.state):
             old = self.load()
@@ -765,6 +784,8 @@ def main():
     parser.add_argument('--base-url', default='https://install.thingspanel.io')
     parser.add_argument('--expected-version', default='')
     parser.add_argument('--recover-config-only', action='store_true')
+    parser.add_argument('--reconcile-activation', action='store_true',
+                        help='re-run compose up and verification for an unresolved activation, then close its journal')
     parser.add_argument('--release-trust-root', default='', help='pinned ECDSA P-256 public key (PEM) for signed releases')
     parser.add_argument('--require-signed-release', action='store_true',
                         help='fail closed unless the release verifies against --release-trust-root')
@@ -782,6 +803,10 @@ def main():
         elif not args.recover_config_only:
             print('[WARN] No release trust root configured; the release signature is not verified.', file=sys.stderr)
         transaction = Transaction(args.root, release_policy=policy)
+        if args.reconcile_activation:
+            transaction.reconcile_activation()
+            print('Activation reconciled.')
+            return 0
         transaction.run(args.base_url, expected_version=args.expected_version,
                         activate=activate_native, recovery_only=args.recover_config_only)
         print('Configuration recovery complete.' if args.recover_config_only else 'Installation operation completed.')

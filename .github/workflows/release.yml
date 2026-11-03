@@ -177,9 +177,39 @@ jobs:
           sha256sum ../install.sh >> SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      # The signing key is a repository secret (an ECDSA P-256 private key, PEM). Without
+      # it no manifest is produced and installers keep their unsigned behaviour.
+      # The matching public key is the trust root installers receive out of band; it is never
+      # taken from this repository or from the payload.
+      - name: Sign release manifest
+        id: sign
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::warning::RELEASE_SIGNING_KEY is not configured; the release manifest is not signed"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          umask 077
+          key="$RUNNER_TEMP/release-key.pem"
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
+          mkdir -p dist/signed
+          git archive HEAD | tar -x -C dist/signed
+          python3 tools/sign_release.py --payload dist/signed --key "$key" \
+            --version "${{ needs.prepare.outputs.version }}" --commit "$GITHUB_SHA" \
+            --publisher "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/.github/workflows/release.yml"
+          shred -u "$key" 2>/dev/null || rm -f "$key"
+          cp dist/signed/release-manifest.json dist/signed/release-manifest.json.sig dist/
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          files: |
+            dist/release-manifest.json
+            dist/release-manifest.json.sig
+          fail_on_unmatched_files: false
           tag_name: ${{ needs.prepare.outputs.version }}
           name: "ThingsPanel All-in-One ${{ needs.prepare.outputs.version }}"
           body: |

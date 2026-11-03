@@ -102,5 +102,27 @@ class ReplacedMounts(unittest.TestCase):
         self.assertFalse(any(c[:3] == ['docker', 'compose', 'restart'] for c in calls))
 
 
+class BackendImageVersion(unittest.TestCase):
+    def check(self, image, version='v1.3.0'):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(root, ignore_errors=True))
+        tx = update.Transaction(root)
+        stage = root / 'stage'
+        stage.mkdir()
+        config = {'services': {'backend': {'image': image}}}
+        text = 'UPDATE_ENGINE_SHA256="' + __import__('hashlib').sha256(Path(update.__file__).read_bytes()).hexdigest() + '"\n'
+        (stage / 'upgrade.sh').write_text(text)
+        tx.artifacts = []
+        with mock.patch.object(update, 'render_with_fallback', return_value=config):
+            tx.validate(stage, version)
+
+    def test_uninterpolated_default_image_matches_requested_version(self):
+        self.check('${TP_BACKEND_IMAGE:-registry.example/thingspanel-go:v1.3.0}')
+
+    def test_uninterpolated_default_image_with_other_version_is_rejected(self):
+        with self.assertRaises(update.UpdateError):
+            self.check('${TP_BACKEND_IMAGE:-registry.example/thingspanel-go:v1.2.0}')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -453,6 +453,10 @@ class Transaction:
         config = render_with_fallback(self.root, stage / 'docker-compose.yml')
         if expected_version:
             image = config.get('services', {}).get('backend', {}).get('image', '')
+            # Without interpolation the reviewed default is the part after ':-'.
+            default = re.fullmatch(r'\$\{TP_BACKEND_IMAGE:-([^${}]+)\}', image)
+            if default:
+                image = default.group(1)
             if '@' in image or ':' not in image or image.rsplit(':', 1)[-1] != expected_version:
                 raise UpdateError('Requested version does not match the staged Compose backend image')
 

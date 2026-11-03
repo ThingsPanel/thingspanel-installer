@@ -176,3 +176,13 @@ wiring, and the bearer token is provisioned out of band.
 
 Real-Docker evidence (opt-in, Linux): `TP_AGENT_REAL_DOCKER=1 TP_AGENT_DOCKER_IMAGE_ID=<id> TP_AGENT_DOCKER_SOCKET=<sock>`
 for the package tests and `TP_AGENT_E2E_BIN` for `cmd/tp-agent`; the image needs a program at `/pluginstub`.
+
+### Plugin profiles that need the platform (added later)
+
+A trusted profile may carry three optional fields, never accepted from an API request: `network`
+(an existing user-defined Docker network; `none`, `host`, `bridge`, `default` are refused), `env`
+(fixed `KEY=VALUE` pairs; `PATH` cannot be overridden) and `reviewed_image_metadata` (accept the pinned
+image's own exposed-port and environment declarations; volumes, labels and OnBuild stay forbidden and
+nothing is ever published). All three default to off, so existing profiles and ledgers are unchanged.
+The profiles file holds secrets and must be mode 0600. `tp-agentctl` posts one request to the socket
+(`tp-agentctl -socket S -token-file F /v1/status instance=x generation=1`).

@@ -143,8 +143,8 @@ type dockerContainer struct {
 
 func preparationCreate(record containerPreparation, host string) dockerCreateRequest {
 	return dockerCreateRequest{
-		dockerConfig: dockerConfig{Image: record.Profile.ImageID, User: "65534:65534", WorkingDir: "/", Entrypoint: []string{record.Profile.Entrypoint}, Cmd: append([]string{}, record.Profile.Args...), Env: []string{preparationPath}, Labels: record.labels(host), Volumes: map[string]json.RawMessage{}, ExposedPorts: map[string]json.RawMessage{}, Healthcheck: dockerHealthcheck{Test: []string{"NONE"}}, NetworkDisabled: true},
-		HostConfig:   dockerHostConfig{NetworkMode: "none", ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, RestartPolicy: dockerRestartPolicy{Name: "no"}, IpcMode: "none", CgroupnsMode: "private", Memory: preparationMemory, NanoCPUs: preparationNanoCPUs, PidsLimit: preparationPids, LogConfig: dockerLogConfig{Type: "none"}, Binds: []string{}, Mounts: []json.RawMessage{}, Devices: []json.RawMessage{}, DeviceRequests: []json.RawMessage{}, PortBindings: map[string]json.RawMessage{}},
+		dockerConfig: dockerConfig{Image: record.Profile.ImageID, User: "65534:65534", WorkingDir: "/", Entrypoint: []string{record.Profile.Entrypoint}, Cmd: append([]string{}, record.Profile.Args...), Env: append([]string{preparationPath}, record.Profile.Env...), Labels: record.labels(host), Volumes: map[string]json.RawMessage{}, ExposedPorts: map[string]json.RawMessage{}, Healthcheck: dockerHealthcheck{Test: []string{"NONE"}}, NetworkDisabled: record.Profile.Network == ""},
+		HostConfig:   dockerHostConfig{NetworkMode: preparedNetwork(record.Profile), ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, RestartPolicy: dockerRestartPolicy{Name: "no"}, IpcMode: "none", CgroupnsMode: "private", Memory: preparationMemory, NanoCPUs: preparationNanoCPUs, PidsLimit: preparationPids, LogConfig: dockerLogConfig{Type: "none"}, Binds: []string{}, Mounts: []json.RawMessage{}, Devices: []json.RawMessage{}, DeviceRequests: []json.RawMessage{}, PortBindings: map[string]json.RawMessage{}},
 	}
 }
 

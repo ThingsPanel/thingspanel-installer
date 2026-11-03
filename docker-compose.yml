@@ -170,7 +170,7 @@ services:
     restart: unless-stopped
   thingsvis-server:
     image: ${TP_THINGSVIS_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-server:v1.0.23}
-    container_name: thingsvis-server
+    container_name: ${TP_THINGSVIS_SERVER_CONTAINER:-thingsvis-server}
     restart: unless-stopped
     ports:
     - ${TP_PORT_THINGSVIS_API:-8000}:8000
@@ -201,7 +201,7 @@ services:
       start_period: 120s
   thingsvis-studio:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingsvis-studio:v1.0.23
-    container_name: thingsvis-studio
+    container_name: ${TP_THINGSVIS_STUDIO_CONTAINER:-thingsvis-studio}
     restart: unless-stopped
     ports:
     - ${TP_PORT_THINGSVIS_STUDIO:-3000}:3000

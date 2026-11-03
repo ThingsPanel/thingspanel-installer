@@ -9,7 +9,7 @@ set -euo pipefail
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="ThingsPanel/thingspanel-installer"
 RAW_BASE="https://install.thingspanel.io"
-UPDATE_ENGINE_SHA256="4e8bbf8c5b5e5614e3eb6a1cf037b6a040cdd5553737b0518285d7051538d36f"
+UPDATE_ENGINE_SHA256="138b1d45c6bcca85c627138a50274e305f0b17037c0f639cfad673173b1af3f8"
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; RESET='\033[0m'

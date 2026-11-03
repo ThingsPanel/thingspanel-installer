@@ -394,6 +394,23 @@ class TransactionTests(unittest.TestCase):
             self.assertFalse((self.root / 'config').exists())
             self.assertEqual(self.tx().load()['phase'], 'recovered')
 
+    def test_completed_installation_can_be_relocated_but_unresolved_cannot(self):
+        tx = self.tx()
+        self.originals(tx)
+        tx.run(BASE)
+        journal = self.root / '.thingspanel-update' / 'journal.json'
+        data = json.loads(journal.read_text(encoding='utf-8'))
+        unresolved = copy.deepcopy(data)
+        unresolved['phase'] = 'activation_started'
+        moved = Path(self.temp.name) / 'moved'
+        self.root.rename(moved)
+        relocated = update.Transaction(moved, downloader=payload_download).load()
+        self.assertEqual(relocated['phase'], 'complete')
+        self.assertEqual(relocated['root'], str(moved))
+        (moved / '.thingspanel-update' / 'journal.json').write_text(json.dumps(unresolved, sort_keys=True) + '\n', encoding='utf-8')
+        with self.assertRaises(update.UpdateError):
+            update.Transaction(moved, downloader=payload_download).load()
+
     def test_completed_journal_is_not_rolled_back_on_restart(self):
         tx = self.tx()
         self.originals(tx)

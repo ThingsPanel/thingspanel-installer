@@ -358,8 +358,14 @@ class Transaction:
             return None
         try:
             data = json.loads(self.journal.read_text(encoding='utf-8'))
-            if data['version'] != 1 or data['root'] != str(self.root) or not isinstance(data['files'], list):
+            if data['version'] != 1 or not isinstance(data['files'], list) or not isinstance(data['root'], str):
                 raise ValueError()
+            if data['root'] != str(self.root):
+                # A finished installation may be relocated; an unresolved one is
+                # bound to the path whose files and services it describes.
+                if data['phase'] not in ('complete', 'recovered'):
+                    raise ValueError()
+                data['root'] = str(self.root)
             if not isinstance(data['operation'], str) or uuid.UUID(data['operation']).hex != data['operation']:
                 raise ValueError()
             expected = {p for p, _ in self.artifacts}

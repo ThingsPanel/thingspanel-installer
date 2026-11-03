@@ -3,6 +3,8 @@
 The journal and Compose/prepare commands are explicit substitutes; this does not start services.
 """
 import importlib.util
+import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -30,7 +32,7 @@ class ReconcileActivation(unittest.TestCase):
 
     def test_success_closes_journal_after_up_and_verify(self):
         tx, data, saved = self.transaction()
-        with mock.patch.object(update, 'run_command') as run:
+        with mock.patch.object(update, 'run_command') as run, mock.patch.object(update, 'restart_services_with_replaced_mounts', return_value=[]):
             tx.reconcile_activation()
         commands = [call.args[0] for call in run.call_args_list]
         self.assertIn('--bootstrap', commands[0])
@@ -47,7 +49,7 @@ class ReconcileActivation(unittest.TestCase):
             calls.append(args)
             if '--verify' in args:
                 raise update.UpdateError('Installer command failed (exit 1)')
-        with mock.patch.object(update, 'run_command', side_effect=run):
+        with mock.patch.object(update, 'run_command', side_effect=run), mock.patch.object(update, 'restart_services_with_replaced_mounts', return_value=[]):
             with self.assertRaises(update.UpdateError):
                 tx.reconcile_activation()
         self.assertEqual(saved, [])
@@ -61,6 +63,43 @@ class ReconcileActivation(unittest.TestCase):
                     tx.reconcile_activation()
             run.assert_not_called()
             self.assertEqual(saved, [])
+
+
+class ReplacedMounts(unittest.TestCase):
+    def run_case(self, file_offset):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(root, ignore_errors=True))
+        mounted = root / 'runtime.json'
+        mounted.write_text('{}')
+        started = __import__('time').time() - 1000
+        os.utime(mounted, (started + file_offset, started + file_offset))
+        stamp = __import__('datetime').datetime.fromtimestamp(started, __import__('datetime').timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.123456789Z')
+        config = {'services': {'notification-core': {'volumes': [{'type': 'bind', 'source': str(mounted), 'target': '/run/config/runtime.json'}]},
+                               'redis': {'volumes': [{'type': 'volume', 'source': 'data', 'target': '/data'}]}}}
+        calls = []
+
+        def fake(args, cwd, **kw):
+            calls.append(args)
+            if args[:3] == ['docker', 'compose', 'config']:
+                return json.dumps(config).encode()
+            if args[:3] == ['docker', 'compose', 'ps']:
+                return b'cid1\n'
+            if args[:2] == ['docker', 'inspect']:
+                return ('true ' + stamp).encode()
+            return b''
+        with mock.patch.object(update, 'run_command', side_effect=fake):
+            stale = update.restart_services_with_replaced_mounts(root)
+        return stale, calls
+
+    def test_file_replaced_after_start_restarts_only_that_service(self):
+        stale, calls = self.run_case(100)
+        self.assertEqual(stale, ['notification-core'])
+        self.assertIn(['docker', 'compose', 'restart', 'notification-core'], calls)
+
+    def test_file_older_than_container_start_restarts_nothing(self):
+        stale, calls = self.run_case(-100)
+        self.assertEqual(stale, [])
+        self.assertFalse(any(c[:3] == ['docker', 'compose', 'restart'] for c in calls))
 
 
 if __name__ == '__main__':

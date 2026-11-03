@@ -697,6 +697,7 @@ class Transaction:
             prepare = [sys.executable, str(self.root / 'config/native/prepare.py')]
             run_command(prepare + ['--bootstrap', '--refresh-devices'], self.root, extra_env=context)
             run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], self.root)
+            restart_services_with_replaced_mounts(self.root)
             run_command(prepare + ['--verify'], self.root, extra_env=context)
             data['phase'] = 'complete'
             self.save(data)
@@ -732,6 +733,46 @@ class Transaction:
                 if data['phase'] != 'activation_started':
                     self.recover(data)
                 raise
+
+
+def restart_services_with_replaced_mounts(root):
+    """Restart services whose single-file bind mounts were replaced after they started.
+
+    Managed files are replaced atomically (a new inode); a running container keeps
+    the old inode, and some services then fail every request until restarted.
+    """
+    config = json.loads(run_command(['docker', 'compose', 'config', '--format', 'json'], root))
+    base = os.path.realpath(str(root))
+    stale = []
+    for name, service in sorted(config.get('services', {}).items()):
+        newest = 0.0
+        for volume in service.get('volumes', []):
+            source = volume.get('source') if isinstance(volume, dict) and volume.get('type') == 'bind' else None
+            if not source or not os.path.isfile(source) or not os.path.realpath(source).startswith(base + os.sep):
+                continue
+            newest = max(newest, os.stat(source).st_mtime)
+        if not newest:
+            continue
+        container = run_command(['docker', 'compose', 'ps', '-q', name], root).decode('utf-8', 'replace').strip().split('\n')[0]
+        if not container:
+            continue
+        started = run_command(['docker', 'inspect', '--format', '{{.State.Running}} {{.State.StartedAt}}', container], root).decode().strip().split()
+        if len(started) != 2 or started[0] != 'true':
+            continue
+        timestamp = started[1]
+        match = re.fullmatch(r'(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?Z', timestamp)
+        if match is None:
+            continue
+        from datetime import datetime, timezone
+        begun = datetime.strptime(match.group(1), '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc).timestamp()
+        if newest > begun:
+            stale.append(name)
+    if stale:
+        print('Restarting services whose mounted files were replaced: ' + ', '.join(stale), flush=True)
+        run_command(['docker', 'compose', 'restart'] + stale, root)
+        # Services sharing another service's network namespace need to follow it.
+        run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], root)
+    return stale
 
 
 def activate_native(root):
@@ -778,6 +819,7 @@ def activate_native(root):
     print('Applying the existing native migration and service preparation.', flush=True)
     native('--bootstrap', '--refresh-devices')
     run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], root)
+    restart_services_with_replaced_mounts(root)
     native('--verify')
 
 

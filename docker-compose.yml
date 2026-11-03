@@ -34,7 +34,7 @@ services:
     volumes:
     - postgres_data:/var/lib/postgresql/data
     ports:
-    - 5555:5432
+    - ${TP_PORT_POSTGRES:-5555}:5432
     environment:
     - TZ=Asia/Shanghai
     - LC_ALL=C.UTF-8
@@ -59,7 +59,7 @@ services:
     volumes:
     - redis_data:/data
     ports:
-    - 6379:6379
+    - ${TP_PORT_REDIS:-6379}:6379
     environment:
     - TZ=Asia/Shanghai
     healthcheck:
@@ -78,7 +78,7 @@ services:
   backend:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.3.0
     ports:
-    - 9999:9999
+    - ${TP_PORT_BACKEND:-9999}:9999
     environment:
     - TZ=Asia/Shanghai
     - GOTP_DB_PSQL_HOST=postgres
@@ -134,8 +134,8 @@ services:
   modbus_service:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/modbus-protocol-plugin:v1.0.6.1
     ports:
-    - 502:502
-    - 503:503
+    - ${TP_PORT_MODBUS:-502}:502
+    - ${TP_PORT_MODBUS2:-503}:503
     environment:
     - MODBUS_THINGSPANEL_ADDRESS=http://backend:9999
     - MODBUS_MQTT_BROKER=mosquitto:1883
@@ -152,8 +152,8 @@ services:
   http_adapter:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-adapter-http:v1.1.0
     ports:
-    - 19090:19090
-    - 19091:19091
+    - ${TP_PORT_HTTP_ADAPTER:-19090}:19090
+    - ${TP_PORT_HTTP_ADAPTER2:-19091}:19091
     environment:
     - TZ=Asia/Shanghai
     - P_SERVER_PORT=19090
@@ -173,7 +173,7 @@ services:
     container_name: thingsvis-server
     restart: unless-stopped
     ports:
-    - 8000:8000
+    - ${TP_PORT_THINGSVIS_API:-8000}:8000
     environment:
     - NODE_ENV=production
     - HOSTNAME=0.0.0.0
@@ -204,7 +204,7 @@ services:
     container_name: thingsvis-studio
     restart: unless-stopped
     ports:
-    - 3000:3000
+    - ${TP_PORT_THINGSVIS_STUDIO:-3000}:3000
     environment:
     - STUDIO_PORT=3000
     - SERVER_HOST=thingsvis-server

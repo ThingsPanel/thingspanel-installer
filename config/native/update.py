@@ -680,7 +680,8 @@ class Transaction:
         self.save(data)
 
     def reconcile_activation(self):
-        """Resume an unresolved activation only by re-running its idempotent tail.
+        """Resume an unresolved activation only by re-running its idempotent tail
+        (migration bootstrap, compose up, verification).
 
         The journal stays ``activation_started`` unless services come up and
         native verification passes; nothing is rolled back or re-applied.
@@ -692,9 +693,11 @@ class Transaction:
             for relative, entry in data.get('activation_files', {}).items():
                 if not entry['applied'] or not same(file_info(safe_target(self.root, relative)), entry['new']):
                     raise UpdateError('Activation configuration is not in its recorded state; manual review is required: ' + relative)
+            context = {'TP_INSTALLER_ACTIVE_OPERATION': data['operation']}
+            prepare = [sys.executable, str(self.root / 'config/native/prepare.py')]
+            run_command(prepare + ['--bootstrap', '--refresh-devices'], self.root, extra_env=context)
             run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], self.root)
-            run_command([sys.executable, str(self.root / 'config/native/prepare.py'), '--verify'], self.root,
-                        extra_env={'TP_INSTALLER_ACTIVE_OPERATION': data['operation']})
+            run_command(prepare + ['--verify'], self.root, extra_env=context)
             data['phase'] = 'complete'
             self.save(data)
 

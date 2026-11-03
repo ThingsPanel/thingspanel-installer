@@ -33,9 +33,10 @@ class ReconcileActivation(unittest.TestCase):
         with mock.patch.object(update, 'run_command') as run:
             tx.reconcile_activation()
         commands = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(commands[0][:3], ['docker', 'compose', 'up'])
-        self.assertIn('--verify', commands[1])
-        self.assertEqual(run.call_args_list[1].kwargs['extra_env'], {'TP_INSTALLER_ACTIVE_OPERATION': 'a' * 32})
+        self.assertIn('--bootstrap', commands[0])
+        self.assertEqual(commands[1][:3], ['docker', 'compose', 'up'])
+        self.assertIn('--verify', commands[2])
+        self.assertEqual(run.call_args_list[2].kwargs['extra_env'], {'TP_INSTALLER_ACTIVE_OPERATION': 'a' * 32})
         self.assertEqual(saved[-1]['phase'], 'complete')
 
     def test_verification_failure_keeps_journal_unresolved(self):

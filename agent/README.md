@@ -153,3 +153,26 @@ not imply execution in this candidate. Windows, a real authenticated Agent
 service, connector activation/pause/upgrade/revoke, receiver-side business
 fencing, full artifact trust, and J-G1 through J-G4 remain separate acceptance
 work. This adapter must not be used to lift those guards.
+
+## Activation, revocation and the service (added on `wp/i1-pg-profiles`)
+
+`activate.go` adds the only path that starts a prepared container, and `service.go` /
+`cmd/tp-agent` expose it. This closes the "no service main, no activation" gap, but it is **not**
+the finished product: there is no enrolment of the host with the platform, no marketinstall/A08/SDK
+wiring, and the bearer token is provisioned out of band.
+
+* A prepared container stays `created` until a control plane with the token issues
+  `/v1/grant` for the accepted generation (a lease of up to 24 h) and calls `/v1/activate`.
+* Everything is re-checked under one lock: accepted generation, key, lease and revocation.
+  An old generation (`409`), a revoked generation, an expired lease and an ungranted instance never start.
+* `/v1/revoke` is durable before anything is stopped and is permanent for that generation.
+* The sweeper (`-sweep-interval`) stops instances whose lease ended or whose generation was superseded.
+* `/v1/retire` removes a stopped, superseded container (never forced) and releases the exclusive resource
+  so the newer generation can prepare; a still-running or current generation is refused.
+* A container that has ever started is never queried through the create-only adapter (that would
+  rewrite its receipt as unknown); the activation ledger answers instead.
+* API: POST JSON over the Unix socket (`0600`), `Authorization: Bearer <token>`:
+  `/v1/accept-generation /v1/prepare /v1/grant /v1/activate /v1/revoke /v1/retire /v1/status /v1/sweep`.
+
+Real-Docker evidence (opt-in, Linux): `TP_AGENT_REAL_DOCKER=1 TP_AGENT_DOCKER_IMAGE_ID=<id> TP_AGENT_DOCKER_SOCKET=<sock>`
+for the package tests and `TP_AGENT_E2E_BIN` for `cmd/tp-agent`; the image needs a program at `/pluginstub`.

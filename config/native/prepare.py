@@ -130,7 +130,7 @@ def update_files():
     return _UPDATE_FILES
 
 
-def save(name, value, broker=False):
+def save(name, value, broker=False, lock_held=False):
     # Formal install/upgrade holds the updater's process lock. Reuse its
     # durable replacement implementation: writing an existing 0440 broker
     # file in place fails for supported non-root Docker Desktop installs.
@@ -141,10 +141,10 @@ def save(name, value, broker=False):
     if broker and os.name == 'posix' and os.geteuid() == 0:
         ownership = {'uid': 1883, 'gid': 1883}
     write_configuration_file(path, (json.dumps(value, indent=2) + '\n').encode('utf-8'),
-                             0o440 if broker else 0o600, ownership)
+                             0o440 if broker else 0o600, ownership, lock_held=lock_held)
 
 
-def write_configuration_file(path, content, mode, ownership=None):
+def write_configuration_file(path, content, mode, ownership=None, lock_held=False):
     files = update_files()
     original = files.file_info(path)
     owner = ownership if ownership is not None else original
@@ -162,11 +162,17 @@ def write_configuration_file(path, content, mode, ownership=None):
             # Preserve the existing explicit device-scope refresh command.
             # This is one atomic resource projection, not an install retry or
             # identity change; serialize it against any new installer run.
-            with files.update_lock(transaction.state):
+            if lock_held:
                 latest = transaction.load()
                 if latest is None or latest['phase'] not in ('complete', 'recovered'):
                     raise RuntimeError('Installation state changed; broker refresh was not applied')
                 files.durable_bytes(path, content, mode, owner)
+            else:
+                with files.update_lock(transaction.state):
+                    latest = transaction.load()
+                    if latest is None or latest['phase'] not in ('complete', 'recovered'):
+                        raise RuntimeError('Installation state changed; broker refresh was not applied')
+                    files.durable_bytes(path, content, mode, owner)
         else:
             raise RuntimeError('Configuration requires an active installer operation; preserve unresolved installation state')
     else:
@@ -395,16 +401,61 @@ def sync_scope(env, restart=None):
     owner first (it reads services.json at start), mosquitto second. Returns True when something changed.
     """
     restart = restart or (lambda service_name: command('docker', 'compose', 'restart', service_name))
-    targets, plugins = query_scopes()
-    wanted = scope_services(env, targets, plugins)
-    if current_services() == wanted:
-        print('Broker device scope unchanged (' + str(len(targets)) + ' devices, ' + str(len(plugins)) + ' plugin devices).')
-        return False
-    save('services.json', wanted, True)
-    print('Broker device scope changed (' + str(len(targets)) + ' devices, ' + str(len(plugins)) + ' plugin devices); restarting broker-owner, then mosquitto.', flush=True)
-    for name in ('broker-owner', 'mosquitto'):
-        restart(name)
-    return True
+    files = update_files()
+    state = ROOT / '.thingspanel-update'
+    files.private_directory(state)
+    # Serialize the full compare/write/restart/ack sequence with installer
+    # activation and other scope workers. The watcher retries a busy lock.
+    with files.update_lock(state):
+        targets, plugins = query_scopes()
+        wanted = scope_services(env, targets, plugins)
+        current = current_services()
+        changed = current != wanted
+        fingerprint = hashlib.sha256(json.dumps(wanted, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        pending = read_scope_restart_pending(files)
+        if not changed and pending is None:
+            print('Broker device scope unchanged (' + str(len(targets)) + ' devices, ' + str(len(plugins)) + ' plugin devices).')
+            return False
+
+        if changed or pending != fingerprint:
+            # Record intent before changing services.json. A process crash or
+            # partial Docker restart leaves this marker for the next watcher pass.
+            write_scope_restart_pending(files, fingerprint)
+        if changed:
+            save('services.json', wanted, True, lock_held=True)
+            print('Broker device scope changed (' + str(len(targets)) + ' devices, ' + str(len(plugins)) + ' plugin devices); restarting broker-owner, then mosquitto.', flush=True)
+        else:
+            print('Retrying pending Broker scope restarts.', flush=True)
+        for name in ('broker-owner', 'mosquitto'):
+            restart(name)
+        clear_scope_restart_pending(files)
+        return changed
+
+
+def read_scope_restart_pending(files=None):
+    files = files or update_files()
+    path = files.safe_target(ROOT, 'config/native/broker/.scope-sync-restart.json')
+    if files.file_info(path) is None:
+        return None
+    value = json.loads(path.read_text(encoding='utf-8'))
+    fingerprint = value.get('sha256') if isinstance(value, dict) else None
+    if not isinstance(fingerprint, str) or re.fullmatch(r'[0-9a-f]{64}', fingerprint) is None:
+        raise RuntimeError('Invalid pending Broker scope restart record')
+    return fingerprint
+
+
+def write_scope_restart_pending(files, fingerprint):
+    path = files.safe_target(ROOT, 'config/native/broker/.scope-sync-restart.json')
+    files.durable_bytes(path,
+                        (json.dumps({'sha256': fingerprint}, sort_keys=True) + '\n').encode(), 0o600)
+
+
+def clear_scope_restart_pending(files):
+    path = files.safe_target(ROOT, 'config/native/broker/.scope-sync-restart.json')
+    if files.file_info(path) is None:
+        return
+    path.unlink()
+    files.fsync_directory(path.parent)
 
 
 def bootstrap():

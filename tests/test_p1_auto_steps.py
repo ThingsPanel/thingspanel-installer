@@ -1,8 +1,11 @@
 """P1: migrations (33.sql) and Broker device scope run without manual commands. No Docker, no database."""
 import hashlib
 import importlib.util
+import concurrent.futures
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -60,9 +63,16 @@ class ScopeServicesTests(unittest.TestCase):
 class SyncScopeTests(unittest.TestCase):
     def run_sync(self, current, targets, plugins):
         calls = []
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        config = root / 'config/native'
+        (config / 'broker').mkdir(parents=True)
         patches = [mock.patch.object(prepare, 'query_scopes', return_value=(targets, plugins)),
                    mock.patch.object(prepare, 'current_services', return_value=current),
-                   mock.patch.object(prepare, 'save', side_effect=lambda *a, **k: calls.append(('save', a[0])))]
+                   mock.patch.object(prepare, 'save', side_effect=lambda *a, **k: calls.append(('save', a[0]))),
+                   mock.patch.object(prepare, 'ROOT', root),
+                   mock.patch.object(prepare, 'CONFIG', config)]
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
@@ -93,13 +103,88 @@ class SyncScopeTests(unittest.TestCase):
         self.assertEqual(calls[0], ('save', 'services.json'))
 
     def test_a_failed_save_restarts_nothing(self):
-        with mock.patch.object(prepare, 'query_scopes', return_value=([], PLUGIN)), \
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'config/native'
+            (config / 'broker').mkdir(parents=True)
+            patches = [mock.patch.object(prepare, 'ROOT', root),
+                mock.patch.object(prepare, 'CONFIG', config),
+                mock.patch.object(prepare, 'query_scopes', return_value=([], PLUGIN)),
                 mock.patch.object(prepare, 'current_services', return_value=None), \
-                mock.patch.object(prepare, 'save', side_effect=RuntimeError('locked')):
+                mock.patch.object(prepare, 'save', side_effect=RuntimeError('locked'))]
+            for patch in patches:
+                patch.start()
+                self.addCleanup(patch.stop)
             restarted = []
             with self.assertRaises(RuntimeError):
                 prepare.sync_scope(ENV, restart=restarted.append)
             self.assertEqual(restarted, [])
+            self.assertTrue((config / 'broker/.scope-sync-restart.json').is_file())
+
+    def test_failed_restart_is_retried_even_when_scope_file_is_already_current(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'config/native'
+            (config / 'broker').mkdir(parents=True)
+            current = {'value': prepare.scope_services(ENV, MQTT, PLUGIN[:1])}
+            calls = []
+            patches = [
+                mock.patch.object(prepare, 'ROOT', root),
+                mock.patch.object(prepare, 'CONFIG', config),
+                mock.patch.object(prepare, 'query_scopes', return_value=(MQTT, PLUGIN)),
+                mock.patch.object(prepare, 'current_services', side_effect=lambda: current['value']),
+                mock.patch.object(prepare, 'save', side_effect=lambda _name, value, _broker, **_kw: current.update(value=value)),
+            ]
+            for patch in patches:
+                patch.start()
+                self.addCleanup(patch.stop)
+
+            def fail_mosquitto_once(name):
+                calls.append(name)
+                if calls == ['broker-owner', 'mosquitto']:
+                    raise RuntimeError('simulated mosquitto restart failure')
+
+            with self.assertRaisesRegex(RuntimeError, 'simulated'):
+                prepare.sync_scope(ENV, restart=fail_mosquitto_once)
+            self.assertEqual(current['value'], prepare.scope_services(ENV, MQTT, PLUGIN))
+            self.assertTrue((config / 'broker/.scope-sync-restart.json').is_file())
+
+            calls.clear()
+            self.assertFalse(prepare.sync_scope(ENV, restart=calls.append))
+            self.assertEqual(calls, ['broker-owner', 'mosquitto'])
+            self.assertFalse((config / 'broker/.scope-sync-restart.json').exists())
+
+    def test_concurrent_scope_pass_cannot_overlap_restart_sequence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'config/native'
+            (config / 'broker').mkdir(parents=True)
+            current = {'value': prepare.scope_services(ENV, MQTT, PLUGIN[:1])}
+            patches = [
+                mock.patch.object(prepare, 'ROOT', root),
+                mock.patch.object(prepare, 'CONFIG', config),
+                mock.patch.object(prepare, 'query_scopes', return_value=(MQTT, PLUGIN)),
+                mock.patch.object(prepare, 'current_services', side_effect=lambda: current['value']),
+                mock.patch.object(prepare, 'save', side_effect=lambda _name, value, _broker, **_kw: current.update(value=value)),
+            ]
+            for patch in patches:
+                patch.start()
+                self.addCleanup(patch.stop)
+            entered, release = threading.Event(), threading.Event()
+
+            def blocked_restart(name):
+                entered.set()
+                self.assertTrue(release.wait(2))
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(prepare.sync_scope, ENV, blocked_restart)
+                self.assertTrue(entered.wait(2))
+                second = pool.submit(prepare.sync_scope, ENV, lambda _name: self.fail('overlapping restart'))
+                with self.assertRaises(Exception) as raised:
+                    second.result(timeout=2)
+                self.assertEqual(type(raised.exception).__name__, 'UpdateError')
+                release.set()
+                self.assertTrue(first.result(timeout=2))
 
     def test_refresh_devices_uses_the_same_scope_with_plugins(self):
         saved = {}
@@ -229,7 +314,11 @@ class ScopeSyncToolTests(unittest.TestCase):
         self.assertEqual(sleeps, [7, 7, 7])
 
     def test_ensure_starts_once_and_reuses_a_live_watcher(self):
-        with tempfile.TemporaryDirectory() as state:
+        with tempfile.TemporaryDirectory() as temporary:
+            stack = Path(temporary) / 'stack'
+            (stack / 'config/native').mkdir(parents=True)
+            (stack / 'config/native/update.py').write_bytes((REPO / 'config/native/update.py').read_bytes())
+            state = Path(temporary) / 'agent'
             spawned = []
 
             class Process:
@@ -240,14 +329,44 @@ class ScopeSyncToolTests(unittest.TestCase):
                 return Process()
 
             alive = lambda pid: 'python3 /x/tools/scope_sync.py watch --stack-dir /s'
-            self.assertEqual(scope_sync.ensure('/s', state, spawn=spawn, ps=alive), 'started')
-            self.assertEqual(scope_sync.ensure('/s', state, spawn=spawn, ps=alive), 'running')
+            self.assertEqual(scope_sync.ensure(stack, state, spawn=spawn, ps=alive), 'started')
+            self.assertEqual(scope_sync.ensure(stack, state, spawn=spawn, ps=alive), 'running')
             self.assertEqual(len(spawned), 1)
             self.assertTrue(spawned[0][1]['start_new_session'])
             self.assertEqual(spawned[0][0][2], 'watch')
             # a recycled pid that now belongs to something else is not a watcher
-            self.assertEqual(scope_sync.ensure('/s', state, spawn=spawn, ps=lambda pid: 'nginx'), 'started')
+            self.assertEqual(scope_sync.ensure(stack, state, spawn=spawn, ps=lambda pid: 'nginx'), 'started')
             self.assertEqual(len(spawned), 2)
+
+    def test_concurrent_ensure_starts_at_most_one_watcher(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            stack = Path(temporary) / 'stack'
+            (stack / 'config/native').mkdir(parents=True)
+            (stack / 'config/native/update.py').write_bytes((REPO / 'config/native/update.py').read_bytes())
+            state = Path(temporary) / 'agent'
+            spawned, entered, release = [], threading.Event(), threading.Event()
+
+            class Process:
+                pid = 9876
+
+            def spawn(_cmd, **_kwargs):
+                spawned.append(True)
+                entered.set()
+                release.wait(2)
+                return Process()
+
+            alive = lambda _pid: 'python3 scope_sync.py watch --stack-dir ' + str(stack)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(scope_sync.ensure, stack, state, 20, spawn, alive)
+                self.assertTrue(entered.wait(2))
+                second = pool.submit(scope_sync.ensure, stack, state, 20, spawn, alive)
+                time.sleep(0.05)
+                release.set()
+                results = [first.result(timeout=2), second.result(timeout=2)]
+            self.assertEqual(len(spawned), 1)
+            self.assertEqual(results.count('started'), 1)
+            other = next(result for result in results if result != 'started')
+            self.assertIn(other, ('busy', 'running'))
 
 
 if __name__ == '__main__':

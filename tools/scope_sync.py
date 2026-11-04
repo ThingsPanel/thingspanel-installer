@@ -15,6 +15,8 @@ renew cron job revives it after a reboot. The scope itself is computed by `confi
 No credentials are read, written or logged here.
 """
 import argparse
+from contextlib import contextmanager
+import importlib.util
 import os
 from pathlib import Path
 import signal
@@ -23,6 +25,31 @@ import sys
 import time
 
 DEFAULT_INTERVAL = 20
+
+
+class ScopeSyncBusy(RuntimeError):
+    """The install/upgrade process currently owns the shared state lock."""
+
+
+@contextmanager
+def installer_lock(stack_dir):
+    """Use the installer's process lock for scope mutations and watcher startup."""
+    stack_dir = Path(stack_dir).resolve()
+    updater_path = stack_dir / 'config/native/update.py'
+    spec = importlib.util.spec_from_file_location('tp_scope_sync_update', updater_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError('installer update lock is unavailable')
+    updater = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(updater)
+    state = stack_dir / '.thingspanel-update'
+    updater.private_directory(state)
+    try:
+        with updater.update_lock(state):
+            yield updater
+    except updater.UpdateError as error:
+        if str(error) == 'Another installer operation is active':
+            raise ScopeSyncBusy(str(error)) from None
+        raise
 
 
 def run_once(stack_dir, runner=subprocess.run, python=sys.executable):
@@ -71,16 +98,22 @@ def ensure(stack_dir, state_dir, interval=DEFAULT_INTERVAL, spawn=subprocess.Pop
     state_dir.mkdir(parents=True, exist_ok=True)
     pidfile = pid_file(state_dir)
     try:
-        pid = int(pidfile.read_text().strip())
-    except (OSError, ValueError):
-        pid = None
-    if pid and is_watcher(pid, ps):
-        return 'running'
-    log = open(state_dir / 'scope-sync.log', 'ab')
-    process = spawn([sys.executable, str(Path(__file__).resolve()), 'watch', '--stack-dir', str(stack_dir), '--interval', str(interval)],
-                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True, close_fds=True)
-    pidfile.write_text(str(process.pid))
-    return 'started'
+        with installer_lock(stack_dir) as updater:
+            try:
+                pid = int(pidfile.read_text().strip())
+            except (OSError, ValueError):
+                pid = None
+            if pid and is_watcher(pid, ps):
+                return 'running'
+            with open(state_dir / 'scope-sync.log', 'ab') as log:
+                process = spawn([sys.executable, str(Path(__file__).resolve()), 'watch', '--stack-dir', str(stack_dir), '--interval', str(interval)],
+                                stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True, close_fds=True)
+            updater.durable_bytes(pidfile, str(process.pid).encode(), 0o600)
+            return 'started'
+    except ScopeSyncBusy:
+        # An installer activation owns the same lock; its following renew or
+        # install will call ensure again after the activation completes.
+        return 'busy'
 
 
 def stop(state_dir):

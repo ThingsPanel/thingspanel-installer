@@ -1,7 +1,11 @@
 import json
+import importlib.util
 import os
 from pathlib import Path
+import shutil
 import sys
+import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -65,6 +69,61 @@ class Identity(unittest.TestCase):
         self.assertEqual(pi.service_identifier(e), 'homeassistant')
         self.assertEqual(pi.binding_of(e), 'none')
         self.assertEqual(pi.binding_of(entry('http-adapter')), 'template')
+
+
+class WatcherStartup(unittest.TestCase):
+    def test_busy_lock_is_retried_after_overlapping_installer_finishes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            stack = root / 'stack'
+            native = stack / 'config/native'
+            native.mkdir(parents=True)
+            shutil.copyfile(Path(__file__).resolve().parents[1] / 'config/native/update.py', native / 'update.py')
+            agent_dir = root / 'agent'
+            state = stack / '.thingspanel-update'
+            updater_spec = importlib.util.spec_from_file_location('test_watcher_update', native / 'update.py')
+            updater = importlib.util.module_from_spec(updater_spec)
+            updater_spec.loader.exec_module(updater)
+            updater.private_directory(state)
+
+            lock_ready, release_lock = threading.Event(), threading.Event()
+
+            def hold_update_lock():
+                with updater.update_lock(state):
+                    lock_ready.set()
+                    release_lock.wait(2)
+
+            holder = threading.Thread(target=hold_update_lock)
+            holder.start()
+            self.assertTrue(lock_ready.wait(2))
+            real_ensure = pi.scope_sync.ensure
+            spawned = []
+
+            class Process:
+                pid = 4242
+
+            def spawn(_cmd, **_kwargs):
+                spawned.append(True)
+                return Process()
+
+            with mock.patch.object(pi.scope_sync, 'ensure', side_effect=lambda s, a: real_ensure(
+                    s, a, spawn=spawn, ps=lambda _pid: 'python3 scope_sync.py watch')):
+                def release_after_busy(_interval):
+                    release_lock.set()
+                    holder.join(2)
+
+                status = pi.ensure_scope_watcher(stack, agent_dir, attempts=3, interval=0, sleep=release_after_busy)
+            holder.join(2)
+            self.assertEqual(status, 'started')
+            self.assertEqual(len(spawned), 1)
+            self.assertEqual((agent_dir / 'scope-sync.pid').read_text(), '4242')
+
+    def test_install_or_renew_does_not_succeed_if_watcher_remains_busy(self):
+        with mock.patch.object(pi.scope_sync, 'ensure', return_value='busy') as ensure, \
+                mock.patch('builtins.print'):
+            with self.assertRaisesRegex(RuntimeError, 'watcher was not started'):
+                pi.ensure_scope_watcher('/stack', '/agent', attempts=2, interval=0, sleep=lambda _seconds: None)
+        self.assertEqual(ensure.call_count, 2)
 
 
 class FakePlatform:

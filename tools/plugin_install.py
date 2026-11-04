@@ -32,6 +32,7 @@ import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import plugin_catalog  # noqa: E402
+import scope_sync  # noqa: E402
 
 DEFAULT_TOKEN_ENV = 'TP_PLUGIN_RUNTIME_TOKEN'
 SERVICE_ENV = 'TP_PLUGIN_SERVICE_IDENTIFIER'
@@ -434,6 +435,19 @@ def install(args):
         state['device_number'] = device_number
         state_path.write_text(json.dumps(state))
     check(args, stack, platform, entry, state)
+    keep_scope_in_sync(args, stack)
+
+
+def keep_scope_in_sync(args, stack):
+    """Refresh the Broker device scope once now, then keep it fresh: devices the user creates or deletes later in the
+    platform UI are picked up by a detached watcher (tools/scope_sync.py), no manual command."""
+    say('keeping the Broker device scope in step with the platform')
+    ok, output = scope_sync.run_once(stack)
+    lines = [line for line in output.splitlines() if 'scope' in line]
+    print('    %s' % (lines[-1] if lines else ('ok' if ok else 'failed')))
+    if not ok:
+        raise RuntimeError('the Broker device scope could not be refreshed: %s' % output)
+    print('    watcher: %s (log %s)' % (scope_sync.ensure(stack, args.agent_dir), Path(args.agent_dir) / 'scope-sync.log'))
 
 
 def container_ip(project_network, generation):
@@ -477,6 +491,7 @@ def renew(args):
     agent.ctl('/v1/grant', instance=args.plugin, generation=state['generation'], request_key=state['request_key'],
               grant_id='renew-%d' % int(time.time()), ttl_seconds=86400)
     print('lease extended by 24 hours')
+    print('scope watcher: %s' % scope_sync.ensure(args.stack_dir, args.agent_dir))
 
 
 def uninstall(args):

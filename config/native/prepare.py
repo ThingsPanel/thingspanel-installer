@@ -22,6 +22,9 @@ CELL = 'community'
 INSTANCE = 'community-mosquitto'
 CLIENT = 'tp-community-backend'
 _UPDATE_FILES = None
+# sql/33.sql: managed plugin runtime identities (T4). Not applied by the backend's own startup migrations.
+EXTRA_COMMUNITY_SQL = ('33.sql',)
+EXTRA_COMMUNITY_COMPONENT = 'community-ext'
 
 
 def command(*args, data=None):
@@ -339,11 +342,20 @@ def service(env, targets):
             'policy_version': 'installer-v1', 'mapping_version': 'standard-v1'}
 
 
-def refresh(env):
-    targets = json.loads(sql('ThingsPanel', "SELECT coalesce(json_agg(t),'[]') FROM (SELECT d.id,d.tenant_id FROM devices d LEFT JOIN device_configs c ON c.id=d.device_config_id AND c.tenant_id=d.tenant_id WHERE d.is_enabled='enabled' AND d.activate_flag='active' AND (d.parent_id IS NULL OR d.parent_id='') AND (d.service_access_id IS NULL OR d.service_access_id='') AND coalesce(d.access_way,'A')<>'B' AND coalesce(c.protocol_type,'MQTT') IN ('MQTT','') ORDER BY d.id)t;"))
-    if len(targets) > 256: raise RuntimeError('Broker service target scope exceeds 256; provision separate reviewed service identities')
-    plugins = json.loads(sql('ThingsPanel', "SELECT coalesce(json_agg(t),'[]') FROM (SELECT d.id,d.tenant_id FROM devices d LEFT JOIN device_configs c ON c.id=d.device_config_id AND c.tenant_id=d.tenant_id WHERE d.is_enabled='enabled' AND d.activate_flag='active' AND ((d.service_access_id IS NOT NULL AND d.service_access_id<>'') OR (c.protocol_type IS NOT NULL AND c.protocol_type NOT IN ('MQTT',''))) ORDER BY d.id)t;"))
-    if len(plugins) > 256: raise RuntimeError('Protocol plugin scope exceeds 256 devices')
+def scope_services(env, targets, plugins):
+    """Broker service identities for the given device scopes (pure; no I/O).
+
+    The platform account issues commands to MQTT devices *and* to plugin (service
+    access) devices: a command for a plugin device is published by the Broker owner
+    on the plugin's prefixed topic, and the owner silently drops it when the device
+    is not in the platform account's scope (T7b finding 3). The protocol account
+    only ever covers plugin devices.
+    """
+    platform_scope, seen = [], set()
+    for item in list(targets) + list(plugins):
+        if item['id'] not in seen:
+            seen.add(item['id'])
+            platform_scope.append(item)
     plugin = service(env, [])
     plugin.update(username=env['TP_PROTOCOL_MQTT_USER'], password=env['TP_PROTOCOL_MQTT_PASSWORD'],
                   allowed_client_ids=[], allow_any_client_id=True, plugin_socket=True,
@@ -351,8 +363,48 @@ def refresh(env):
                   allowed_tenant_ids=sorted({item['tenant_id'] for item in plugins}))
     plugin['principal']['device_id'] = 'community-protocols'
     plugin['policy']['subscribe'] = []
-    save('services.json', [service(env, targets), plugin], True)
-    print('MQTT command allowlist refreshed for ' + str(len(targets)) + ' devices; restart broker-owner and mosquitto to load it.')
+    return [service(env, platform_scope), plugin]
+
+
+def query_scopes():
+    targets = json.loads(sql('ThingsPanel', "SELECT coalesce(json_agg(t),'[]') FROM (SELECT d.id,d.tenant_id FROM devices d LEFT JOIN device_configs c ON c.id=d.device_config_id AND c.tenant_id=d.tenant_id WHERE d.is_enabled='enabled' AND d.activate_flag='active' AND (d.parent_id IS NULL OR d.parent_id='') AND (d.service_access_id IS NULL OR d.service_access_id='') AND coalesce(d.access_way,'A')<>'B' AND coalesce(c.protocol_type,'MQTT') IN ('MQTT','') ORDER BY d.id)t;"))
+    if len(targets) > 256: raise RuntimeError('Broker service target scope exceeds 256; provision separate reviewed service identities')
+    plugins = json.loads(sql('ThingsPanel', "SELECT coalesce(json_agg(t),'[]') FROM (SELECT d.id,d.tenant_id FROM devices d LEFT JOIN device_configs c ON c.id=d.device_config_id AND c.tenant_id=d.tenant_id WHERE d.is_enabled='enabled' AND d.activate_flag='active' AND ((d.service_access_id IS NOT NULL AND d.service_access_id<>'') OR (c.protocol_type IS NOT NULL AND c.protocol_type NOT IN ('MQTT',''))) ORDER BY d.id)t;"))
+    if len(plugins) > 256: raise RuntimeError('Protocol plugin scope exceeds 256 devices')
+    return targets, plugins
+
+
+def refresh(env):
+    targets, plugins = query_scopes()
+    save('services.json', scope_services(env, targets, plugins), True)
+    print('MQTT command allowlist refreshed for ' + str(len(targets)) + ' devices and ' + str(len(plugins)) + ' plugin devices; restart broker-owner and mosquitto to load it.')
+
+
+def current_services():
+    files = update_files()
+    path = files.safe_target(CONFIG, 'broker/services.json')
+    if files.file_info(path) is None:
+        path = files.safe_target(CONFIG, 'services.json')
+    return json.loads(path.read_text(encoding='utf-8')) if files.file_info(path) is not None else None
+
+
+def sync_scope(env, restart=None):
+    """Refresh the Broker device scope; only when it changed, restart broker-owner and then mosquitto.
+
+    mosquitto shares broker-owner's network namespace, so the order is fixed:
+    owner first (it reads services.json at start), mosquitto second. Returns True when something changed.
+    """
+    restart = restart or (lambda service_name: command('docker', 'compose', 'restart', service_name))
+    targets, plugins = query_scopes()
+    wanted = scope_services(env, targets, plugins)
+    if current_services() == wanted:
+        print('Broker device scope unchanged (' + str(len(targets)) + ' devices, ' + str(len(plugins)) + ' plugin devices).')
+        return False
+    save('services.json', wanted, True)
+    print('Broker device scope changed (' + str(len(targets)) + ' devices, ' + str(len(plugins)) + ' plugin devices); restarting broker-owner, then mosquitto.', flush=True)
+    for name in ('broker-owner', 'mosquitto'):
+        restart(name)
+    return True
 
 
 def bootstrap():
@@ -380,6 +432,10 @@ def bootstrap():
         for number in range(current + 1, target_version + 1):
             content = (stage / 'community' / (str(number) + '.sql')).read_text()
             sql('ThingsPanel', "BEGIN; SET LOCAL lock_timeout='30s';\n" + content + "\nUPDATE sys_version SET version_number=" + str(number) + ",version='v1.3.0'; COMMIT;")
+        # Schema files newer than sys_version's VERSION_NUMBER that the backend does not apply by itself at startup.
+        # Idempotent (CREATE ... IF NOT EXISTS) and checksum-recorded; an older image without the file simply skips it.
+        apply_migrations('ThingsPanel', EXTRA_COMMUNITY_COMPONENT,
+                         [stage / 'community' / name for name in EXTRA_COMMUNITY_SQL if (stage / 'community' / name).is_file()])
         apply_migrations('ThingsPanel', 'broker', sorted((stage / 'community/broker').glob('[0-9]*.sql'), key=lambda p: int(p.name.split('_')[0])))
         for database in ['device_metadata', 'automation', 'notification']:
             if sql('postgres', "SELECT count(*) FROM pg_database WHERE datname='" + database + "'") == '0':
@@ -441,7 +497,7 @@ def pull_images(configured=None):
 def apply_migrations(database, component, paths):
     sql(database, 'CREATE TABLE IF NOT EXISTS installer_migrations(component text NOT NULL,version int NOT NULL,checksum text NOT NULL,PRIMARY KEY(component,version))')
     for path in paths:
-        number = int(path.name.split('_')[0])
+        number = int(re.match(r'\d+', path.name).group())
         content = path.read_text().replace('\r\n', '\n')
         checksum = hashlib.sha256(content.encode()).hexdigest()
         recorded = sql(database, "SELECT checksum FROM installer_migrations WHERE component='" + component + "' AND version=" + str(number))
@@ -449,7 +505,7 @@ def apply_migrations(database, component, paths):
             if recorded != checksum: raise RuntimeError('Migration checksum mismatch: ' + component + '/' + path.name)
             continue
         # A pre-existing native database without this installer's ledger needs its native version respected.
-        if component != 'broker' and sql(database, "SELECT to_regclass('public.schema_migrations') IS NOT NULL") == 't':
+        if component not in ('broker', EXTRA_COMMUNITY_COMPONENT) and sql(database, "SELECT to_regclass('public.schema_migrations') IS NOT NULL") == 't':
             native_version = sql(database, 'SELECT coalesce(max(version),0) FROM schema_migrations WHERE dirty=false')
             if int(native_version) >= number:
                 sql(database, "INSERT INTO installer_migrations VALUES('" + component + "'," + str(number) + ",'" + checksum + "')")
@@ -490,6 +546,7 @@ def verify():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--refresh-devices', action='store_true')
+    parser.add_argument('--sync-scope', action='store_true', help='refresh the Broker device scope and restart broker-owner, mosquitto only if it changed')
     parser.add_argument('--bootstrap', action='store_true')
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--pull', action='store_true')
@@ -502,5 +559,6 @@ if __name__ == '__main__':
     if args.pull: pull_images(env)
     if args.bootstrap: bootstrap()
     if args.refresh_devices: refresh(env)
+    if args.sync_scope: sync_scope(env)
     if args.verify: verify()
     print('Native service configuration prepared. Credentials remain in local .env and config/native/.')

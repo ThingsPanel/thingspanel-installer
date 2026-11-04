@@ -74,6 +74,13 @@ class Agent:
         self.dir = Path(args.agent_dir)
         self.args = args
 
+    def write_profile(self, profile):
+        profiles = self.dir / 'profiles.json'
+        profiles.write_text(json.dumps([profile]))
+        os.chmod(profiles, 0o600)
+        sh(['docker', 'restart', self.name])
+        time.sleep(3)
+
     def ensure_running(self, profile):
         self.dir.mkdir(parents=True, exist_ok=True)
         os.chmod(self.dir, 0o700)
@@ -152,11 +159,17 @@ def reload_broker(stack_dir, web_url):
     wait_web(web_url)
 
 
-def agent_install(agent, entry, state, state_path):
+def agent_install(agent, entry, state, state_path, platform=None, profile=None):
     generation = int(state.get('generation', 0)) + 1
     key = 'install-%d' % generation
     if state.get('generation'):
         agent.ctl('/v1/revoke', instance=entry['id'], generation=state['generation'], reason='replaced by generation %d' % generation)
+    if platform is not None:
+        # The platform issues one revocable identity per generation; a higher generation revokes every lower one.
+        issued = platform.must('/api/v1/plugin/runtime/identity', {'plugin_instance': entry['id'], 'service_identifier': entry['platform']['protocol_type'],
+                                                                   'generation': generation, 'ttl_hours': 24})
+        profile['env'] = [e for e in profile['env'] if not e.startswith('P_PLATFORM_API_TOKEN=')] + ['P_PLATFORM_API_TOKEN=' + issued['token']]
+        agent.write_profile(profile)
     agent.ctl('/v1/accept-generation', instance=entry['id'], generation=generation)
     if state.get('generation'):
         agent.ctl('/v1/retire', instance=entry['id'], generation=state['generation'])
@@ -229,7 +242,7 @@ def install(args):
     os.chmod(state_path, 0o600)
     agent = Agent(args, project)
     agent.ensure_running(profile)
-    agent_install(agent, entry, state, state_path)
+    agent_install(agent, entry, state, state_path, platform, profile)
     if device_number and not state.get('registered'):
         say('first device: the plugin registers it on its first uplink, then the Broker allowlist is reloaded')
         net = args.network or '%s_thingspanel_network' % project
@@ -238,7 +251,7 @@ def install(args):
         time.sleep(3)
         reload_broker(stack, args.web_url)
         platform = Platform(args.web_url, email, password)
-        agent_install(agent, entry, state, state_path)  # new generation: the plugin reconnects to the reloaded Broker
+        agent_install(agent, entry, state, state_path, platform, profile)  # new generation: the plugin reconnects to the reloaded Broker
         state['registered'] = True
         state['device_number'] = device_number
         state_path.write_text(json.dumps(state))

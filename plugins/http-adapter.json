@@ -1,9 +1,9 @@
 {
  "id": "http-adapter",
- "version": "1.2.0-f87e259",
+ "version": "1.2.0-identity",
  "kind": "service",
  "description": "HTTP device access: devices POST telemetry to the plugin, it forwards to the platform.",
- "image_id": "sha256:34ae9707813a09042ec5d64b46263b349dfffd0d1ddd5b1935d3423011ef14ba",
+ "image_id": "sha256:c800f14b4bd98eabef6d09bee0c2e69e5f44710330e3aae6cf199859a903d1c7",
  "entrypoint": "/app/tp-plugin-http",
  "args": [
   "-c",

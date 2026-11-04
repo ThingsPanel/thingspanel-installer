@@ -358,8 +358,14 @@ class Transaction:
             return None
         try:
             data = json.loads(self.journal.read_text(encoding='utf-8'))
-            if data['version'] != 1 or data['root'] != str(self.root) or not isinstance(data['files'], list):
+            if data['version'] != 1 or not isinstance(data['files'], list) or not isinstance(data['root'], str):
                 raise ValueError()
+            if data['root'] != str(self.root):
+                # A finished installation may be relocated; an unresolved one is
+                # bound to the path whose files and services it describes.
+                if data['phase'] not in ('complete', 'recovered'):
+                    raise ValueError()
+                data['root'] = str(self.root)
             if not isinstance(data['operation'], str) or uuid.UUID(data['operation']).hex != data['operation']:
                 raise ValueError()
             expected = {p for p, _ in self.artifacts}
@@ -447,6 +453,10 @@ class Transaction:
         config = render_with_fallback(self.root, stage / 'docker-compose.yml')
         if expected_version:
             image = config.get('services', {}).get('backend', {}).get('image', '')
+            # Without interpolation the reviewed default is the part after ':-'.
+            default = re.fullmatch(r'\$\{TP_BACKEND_IMAGE:-([^${}]+)\}', image)
+            if default:
+                image = default.group(1)
             if '@' in image or ':' not in image or image.rsplit(':', 1)[-1] != expected_version:
                 raise UpdateError('Requested version does not match the staged Compose backend image')
 
@@ -679,6 +689,29 @@ class Transaction:
         entry['applied'] = True
         self.save(data)
 
+    def reconcile_activation(self):
+        """Resume an unresolved activation only by re-running its idempotent tail
+        (migration bootstrap, compose up, verification).
+
+        The journal stays ``activation_started`` unless services come up and
+        native verification passes; nothing is rolled back or re-applied.
+        """
+        with update_lock(self.state):
+            data = self.load()
+            if data is None or data['phase'] != 'activation_started':
+                raise UpdateError('There is no unresolved activation to reconcile')
+            for relative, entry in data.get('activation_files', {}).items():
+                if not entry['applied'] or not same(file_info(safe_target(self.root, relative)), entry['new']):
+                    raise UpdateError('Activation configuration is not in its recorded state; manual review is required: ' + relative)
+            context = {'TP_INSTALLER_ACTIVE_OPERATION': data['operation']}
+            prepare = [sys.executable, str(self.root / 'config/native/prepare.py')]
+            run_command(prepare + ['--bootstrap', '--refresh-devices'], self.root, extra_env=context)
+            run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], self.root)
+            restart_services_with_replaced_mounts(self.root)
+            run_command(prepare + ['--verify'], self.root, extra_env=context)
+            data['phase'] = 'complete'
+            self.save(data)
+
     def run(self, source, *, expected_version='', activate=None, recovery_only=False):
         with update_lock(self.state):
             old = self.load()
@@ -710,6 +743,46 @@ class Transaction:
                 if data['phase'] != 'activation_started':
                     self.recover(data)
                 raise
+
+
+def restart_services_with_replaced_mounts(root):
+    """Restart services whose single-file bind mounts were replaced after they started.
+
+    Managed files are replaced atomically (a new inode); a running container keeps
+    the old inode, and some services then fail every request until restarted.
+    """
+    config = json.loads(run_command(['docker', 'compose', 'config', '--format', 'json'], root))
+    base = os.path.realpath(str(root))
+    stale = []
+    for name, service in sorted(config.get('services', {}).items()):
+        newest = 0.0
+        for volume in service.get('volumes', []):
+            source = volume.get('source') if isinstance(volume, dict) and volume.get('type') == 'bind' else None
+            if not source or not os.path.isfile(source) or not os.path.realpath(source).startswith(base + os.sep):
+                continue
+            newest = max(newest, os.stat(source).st_mtime)
+        if not newest:
+            continue
+        container = run_command(['docker', 'compose', 'ps', '-q', name], root).decode('utf-8', 'replace').strip().split('\n')[0]
+        if not container:
+            continue
+        started = run_command(['docker', 'inspect', '--format', '{{.State.Running}} {{.State.StartedAt}}', container], root).decode().strip().split()
+        if len(started) != 2 or started[0] != 'true':
+            continue
+        timestamp = started[1]
+        match = re.fullmatch(r'(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?Z', timestamp)
+        if match is None:
+            continue
+        from datetime import datetime, timezone
+        begun = datetime.strptime(match.group(1), '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc).timestamp()
+        if newest > begun:
+            stale.append(name)
+    if stale:
+        print('Restarting services whose mounted files were replaced: ' + ', '.join(stale), flush=True)
+        run_command(['docker', 'compose', 'restart'] + stale, root)
+        # Services sharing another service's network namespace need to follow it.
+        run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], root)
+    return stale
 
 
 def activate_native(root):
@@ -756,6 +829,7 @@ def activate_native(root):
     print('Applying the existing native migration and service preparation.', flush=True)
     native('--bootstrap', '--refresh-devices')
     run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], root)
+    restart_services_with_replaced_mounts(root)
     native('--verify')
 
 
@@ -765,6 +839,8 @@ def main():
     parser.add_argument('--base-url', default='https://install.thingspanel.io')
     parser.add_argument('--expected-version', default='')
     parser.add_argument('--recover-config-only', action='store_true')
+    parser.add_argument('--reconcile-activation', action='store_true',
+                        help='re-run compose up and verification for an unresolved activation, then close its journal')
     parser.add_argument('--release-trust-root', default='', help='pinned ECDSA P-256 public key (PEM) for signed releases')
     parser.add_argument('--require-signed-release', action='store_true',
                         help='fail closed unless the release verifies against --release-trust-root')
@@ -782,6 +858,10 @@ def main():
         elif not args.recover_config_only:
             print('[WARN] No release trust root configured; the release signature is not verified.', file=sys.stderr)
         transaction = Transaction(args.root, release_policy=policy)
+        if args.reconcile_activation:
+            transaction.reconcile_activation()
+            print('Activation reconciled.')
+            return 0
         transaction.run(args.base_url, expected_version=args.expected_version,
                         activate=activate_native, recovery_only=args.recover_config_only)
         print('Configuration recovery complete.' if args.recover_config_only else 'Installation operation completed.')

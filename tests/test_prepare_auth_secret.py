@@ -251,6 +251,20 @@ class LocalImageSelectionTests(unittest.TestCase):
                 prepare.pull_images({'TP_THINGSVIS_IMAGE': image, 'TP_THINGSVIS_LOCAL_IMAGE_ID': 'sha256:' + 'a' * 64})
         run.assert_not_called()
 
+    def test_pinned_backend_image_is_not_pulled_and_mismatch_fails(self):
+        image = 'local/backend-reviewed:fixture'
+        image_id = 'sha256:' + 'c' * 64
+        config = {'services': {'backend': {'image': image}, 'redis': {'image': 'registry/redis:fixture'}}}
+        with mock.patch.object(prepare, 'command', side_effect=[json.dumps(config), image_id]), mock.patch.object(
+                prepare.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+            prepare.pull_images({'TP_BACKEND_IMAGE': image, 'TP_BACKEND_LOCAL_IMAGE_ID': image_id})
+        self.assertEqual([call.args[0] for call in run.call_args_list], [['docker', 'pull', 'registry/redis:fixture']])
+        with mock.patch.object(prepare, 'command', side_effect=[json.dumps(config), 'sha256:' + 'd' * 64]), mock.patch.object(
+                prepare.subprocess, 'run') as run:
+            with self.assertRaisesRegex(RuntimeError, 'identity differs'):
+                prepare.pull_images({'TP_BACKEND_IMAGE': image, 'TP_BACKEND_LOCAL_IMAGE_ID': image_id})
+        run.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

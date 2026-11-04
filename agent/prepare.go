@@ -33,6 +33,17 @@ type PreparationProfile struct {
 	ImageID    string   `json:"image_id"`
 	Entrypoint string   `json:"entrypoint"`
 	Args       []string `json:"args"`
+	// The three fields below are reviewed operator configuration for plugins that must talk to the
+	// platform. They never come from an API request and are all off by default. Network names an
+	// existing user-defined Docker network (no host/bridge/none/container networks); Env is a fixed
+	// list of KEY=VALUE pairs; ReviewedImageMetadata accepts the pinned image's own exposed-port and
+	// environment declarations (volumes, labels and OnBuild stay forbidden, nothing is ever published).
+	Network               string   `json:"network,omitempty"`
+	Env                   []string `json:"env,omitempty"`
+	ReviewedImageMetadata bool     `json:"reviewed_image_metadata,omitempty"`
+	// NetworkAlias is a stable DNS alias on Network (e.g. tp-plugin-homeassistant), so the address the
+	// platform registers survives container replacement across generations. Requires Network.
+	NetworkAlias string `json:"network_alias,omitempty"`
 }
 
 type PrepareContainerRequest struct {
@@ -111,6 +122,9 @@ func newDockerPreparer(store *Store, engine preparationEngine, profiles []Prepar
 }
 
 func validPreparationProfile(p PreparationProfile) bool {
+	if p.NetworkAlias != "" && (p.Network == "" || !validNetworkAlias(p.NetworkAlias)) {
+		return false
+	}
 	if !valid(p.Name) || len(p.Name) > 128 || !validImageID(p.ImageID) || !strings.HasPrefix(p.Entrypoint, "/") || !valid(p.Entrypoint) || len(p.Entrypoint) > 1024 || len(p.Args) > 32 {
 		return false
 	}
@@ -121,7 +135,54 @@ func validPreparationProfile(p PreparationProfile) bool {
 		}
 		total += len(arg)
 	}
-	return total <= 8192
+	if total > 8192 {
+		return false
+	}
+	if p.Network != "" && !validPreparationNetwork(p.Network) {
+		return false
+	}
+	if len(p.Env) > 64 {
+		return false
+	}
+	seen := map[string]bool{}
+	envTotal := 0
+	for _, entry := range p.Env {
+		key, _, found := strings.Cut(entry, "=")
+		if !found || !validEnvKey(key) || key == "PATH" || seen[key] || strings.ContainsRune(entry, '\x00') {
+			return false
+		}
+		seen[key] = true
+		envTotal += len(entry)
+	}
+	return envTotal <= 16384
+}
+
+func validEnvKey(key string) bool {
+	if key == "" || len(key) > 128 || (key[0] >= '0' && key[0] <= '9') {
+		return false
+	}
+	for _, r := range key {
+		if !(r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
+}
+
+func validPreparationNetwork(name string) bool {
+	switch name {
+	case "none", "host", "bridge", "default":
+		return false
+	}
+	if len(name) > 128 || name[0] == '-' || name[0] == '.' || name[0] == '_' {
+		return false
+	}
+	for _, r := range name {
+		if !(r == '_' || r == '-' || r == '.' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
 }
 
 func validImageID(value string) bool {
@@ -227,7 +288,7 @@ func (p *DockerPreparer) Prepare(ctx context.Context, request PrepareContainerRe
 		if err != nil {
 			return err
 		}
-		if !safePreparationImage(image, profile.ImageID) {
+		if !safePreparationImage(image, profile) {
 			return ErrPreparationPolicy
 		}
 		// A container without this local durable intent is never adopted, even
@@ -358,8 +419,16 @@ func validatePreparations(disk diskState) error {
 	return nil
 }
 
-func safePreparationImage(image dockerImage, id string) bool {
-	if image.ID != id || image.OS != "linux" || len(image.Config.Volumes) != 0 || len(image.Config.ExposedPorts) != 0 || len(image.Config.OnBuild) != 0 || len(image.Config.Labels) != 0 {
+func safePreparationImage(image dockerImage, profile PreparationProfile) bool {
+	if image.ID != profile.ImageID || image.OS != "linux" || len(image.Config.Volumes) != 0 || len(image.Config.OnBuild) != 0 || len(image.Config.Labels) != 0 {
+		return false
+	}
+	if profile.ReviewedImageMetadata {
+		// The pinned image ID is the review: its declared ports and environment are accepted,
+		// but this adapter still publishes nothing and adds only the profile's own environment.
+		return true
+	}
+	if len(image.Config.ExposedPorts) != 0 {
 		return false
 	}
 	// Docker merges image environment into create requests. Reject any inherited
@@ -381,17 +450,68 @@ func safePreparedContainer(container dockerContainer, record containerPreparatio
 	}
 	expected := preparationCreate(record, host)
 	config, limits := container.Config, container.HostConfig
-	if config.Image != expected.Image || config.User != expected.User || config.WorkingDir != expected.WorkingDir || !reflect.DeepEqual(config.Entrypoint, expected.Entrypoint) || !equalStrings(config.Cmd, expected.Cmd) || !equalStrings(config.Env, expected.Env) || !reflect.DeepEqual(config.Labels, expected.Labels) || config.Tty || config.OpenStdin || config.AttachStdin || config.AttachStdout || config.AttachStderr || len(config.Volumes) != 0 || len(config.ExposedPorts) != 0 || !equalStrings(config.Healthcheck.Test, []string{"NONE"}) {
+	if config.Image != expected.Image || config.User != expected.User || config.WorkingDir != expected.WorkingDir || !reflect.DeepEqual(config.Entrypoint, expected.Entrypoint) || !equalStrings(config.Cmd, expected.Cmd) || !preparedEnvMatches(config.Env, expected.Env, record.Profile) || !reflect.DeepEqual(config.Labels, expected.Labels) || config.Tty || config.OpenStdin || config.AttachStdin || config.AttachStdout || config.AttachStderr || len(config.Volumes) != 0 || (len(config.ExposedPorts) != 0 && !record.Profile.ReviewedImageMetadata) || !equalStrings(config.Healthcheck.Test, []string{"NONE"}) {
 		return false
 	}
-	if limits.NetworkMode != "none" || !limits.ReadonlyRootfs || limits.Privileged || limits.AutoRemove || limits.PublishAllPorts || !equalStrings(limits.CapDrop, []string{"ALL"}) || len(limits.CapAdd) != 0 || !equalStrings(limits.SecurityOpt, []string{"no-new-privileges:true"}) || limits.RestartPolicy.Name != "no" || limits.RestartPolicy.MaximumRetryCount != 0 || limits.IpcMode != "none" || limits.PidMode != "" || limits.UTSMode != "" || limits.UsernsMode != "" || limits.CgroupnsMode != "private" || limits.Memory != preparationMemory || limits.NanoCPUs != preparationNanoCPUs || limits.PidsLimit != preparationPids || limits.LogConfig.Type != "none" {
+	if limits.NetworkMode != preparedNetwork(record.Profile) || !limits.ReadonlyRootfs || limits.Privileged || limits.AutoRemove || limits.PublishAllPorts || !equalStrings(limits.CapDrop, []string{"ALL"}) || len(limits.CapAdd) != 0 || !equalStrings(limits.SecurityOpt, []string{"no-new-privileges:true"}) || limits.RestartPolicy.Name != "no" || limits.RestartPolicy.MaximumRetryCount != 0 || limits.IpcMode != "none" || limits.PidMode != "" || limits.UTSMode != "" || limits.UsernsMode != "" || limits.CgroupnsMode != "private" || limits.Memory != preparationMemory || limits.NanoCPUs != preparationNanoCPUs || limits.PidsLimit != preparationPids || limits.LogConfig.Type != "none" {
 		return false
 	}
 	if len(limits.Binds) != 0 || len(limits.Mounts) != 0 || len(limits.Devices) != 0 || len(limits.DeviceRequests) != 0 || len(limits.DeviceCgroupRules) != 0 || len(limits.VolumesFrom) != 0 || len(limits.PortBindings) != 0 || len(limits.Links) != 0 || len(limits.ExtraHosts) != 0 || len(limits.GroupAdd) != 0 || len(limits.Tmpfs) != 0 || len(limits.Sysctls) != 0 || len(container.Mounts) != 0 || len(container.NetworkSettings.Ports) != 0 {
 		return false
 	}
-	for network := range container.NetworkSettings.Networks {
-		if network != "none" {
+	for network, endpoint := range container.NetworkSettings.Networks {
+		if network != preparedNetwork(record.Profile) {
+			return false
+		}
+		if alias := record.Profile.NetworkAlias; alias != "" && !containsString(endpoint.Aliases, alias) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsString(list []string, want string) bool {
+	for _, item := range list {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+// validNetworkAlias accepts a conservative DNS label.
+func validNetworkAlias(alias string) bool {
+	if alias == "" || len(alias) > 63 {
+		return false
+	}
+	for i, c := range alias {
+		ok := c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' && i > 0 && i < len(alias)-1
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func preparedNetwork(profile PreparationProfile) string {
+	if profile.Network != "" {
+		return profile.Network
+	}
+	return "none"
+}
+
+// preparedEnvMatches keeps the original exact comparison unless the profile reviewed the image's own
+// environment; then every variable this adapter set must be present with its exact value.
+func preparedEnvMatches(actual, expected []string, profile PreparationProfile) bool {
+	if !profile.ReviewedImageMetadata {
+		return equalStrings(actual, expected)
+	}
+	have := map[string]bool{}
+	for _, entry := range actual {
+		have[entry] = true
+	}
+	for _, entry := range expected {
+		if !have[entry] {
 			return false
 		}
 	}

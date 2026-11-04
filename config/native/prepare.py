@@ -408,10 +408,26 @@ def pull_images(configured=None):
             raise RuntimeError('Local ThingsVis image selection does not match the reviewed configuration')
         if command('docker', 'image', 'inspect', '--format', '{{.Id}}', local_image) != local_id:
             raise RuntimeError('Local ThingsVis image identity differs; no registry fallback was attempted')
+    # Reviewed local images for the backend and the TDengine profile follow the
+    # same rule: an exact image ID is pinned, and a mismatch never falls back to a registry.
+    pinned = {}
+    for image_key, id_key in (('TP_BACKEND_IMAGE', 'TP_BACKEND_LOCAL_IMAGE_ID'), ('TP_TDENGINE_IMAGE', 'TP_TDENGINE_LOCAL_IMAGE_ID')):
+        identity = configured.get(id_key)
+        if not identity:
+            continue
+        reference = configured.get(image_key)
+        if not reference or re.fullmatch(r'sha256:[0-9a-f]{64}', identity) is None:
+            raise RuntimeError('Local image selection does not match the reviewed configuration: ' + id_key)
+        if command('docker', 'image', 'inspect', '--format', '{{.Id}}', reference) != identity:
+            raise RuntimeError('Local image identity differs; no registry fallback was attempted')
+        pinned[reference] = identity
     images = dict.fromkeys(service['image'] for service in config['services'].values())
     for image in images:
         if image == local_image:
             print('Using the explicitly selected local ThingsVis image identity.', flush=True)
+            continue
+        if image in pinned:
+            print('Using the pinned local image ' + image, flush=True)
             continue
         print('Pulling ' + image, flush=True)
         for attempt in range(3):

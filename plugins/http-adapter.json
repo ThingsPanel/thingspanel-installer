@@ -1,0 +1,40 @@
+{
+ "id": "http-adapter",
+ "version": "1.2.0-identity",
+ "kind": "service",
+ "description": "HTTP device access: devices POST telemetry to the plugin, it forwards to the platform.",
+ "image_id": "sha256:c800f14b4bd98eabef6d09bee0c2e69e5f44710330e3aae6cf199859a903d1c7",
+ "entrypoint": "/app/tp-plugin-http",
+ "args": [
+  "-c",
+  "/app/config/config.yaml"
+ ],
+ "env": [
+  "P_LOG_ENABLEFILE=false",
+  "P_LOG_DEVICE_LOG_ENABLED=false",
+  "P_SERVER_PORT=19090",
+  "P_SERVER_HTTP_PORT=19091",
+  "P_PLATFORM_URL=http://backend:9999",
+  "P_PLATFORM_MQTT_BROKER=tcp://mosquitto:1883"
+ ],
+ "env_from_stack": {
+  "P_PLATFORM_MQTT_USERNAME": "TP_PROTOCOL_MQTT_USER",
+  "P_PLATFORM_MQTT_PASSWORD": "TP_PROTOCOL_MQTT_PASSWORD"
+ },
+ "env_generated": {
+  "P_PLATFORM_TEMPLATE_SECRET": 32,
+  "P_SERVER_HTTP_API_KEY": 32
+ },
+ "platform": {
+  "protocol_type": "HTTP",
+  "device_type": "1",
+  "template_name": "HTTP plugin template",
+  "secret_env": "P_PLATFORM_TEMPLATE_SECRET",
+  "uplink_port": 19091,
+  "uplink_path": "/api/v1/uplink",
+  "api_key_env": "P_SERVER_HTTP_API_KEY"
+ },
+ "identity": {
+  "token_env": "P_PLATFORM_API_TOKEN"
+ }
+}

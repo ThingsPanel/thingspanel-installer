@@ -86,16 +86,32 @@ def validate_supported_backend_database(config):
         env = parsed
     if not isinstance(env, dict):
         raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
-    required = ('GOTP_DB_PSQL_HOST', 'GOTP_DB_PSQL_PORT', 'GOTP_DB_PSQL_USERNAME', 'GOTP_DB_PSQL_DBNAME')
-    if any(not isinstance(env.get(key), (str, int)) or not str(env[key]).strip() or '$' in str(env[key]) for key in required):
+    # Keep accepting legacy-only installed Compose files during upgrade preflight.
+    # New defaults carry both contracts until the published v1.3.0 image is retired.
+    legacy_required = ('GOTP_DB_PSQL_HOST', 'GOTP_DB_PSQL_PORT', 'GOTP_DB_PSQL_USERNAME', 'GOTP_DB_PSQL_DBNAME')
+    if any(not isinstance(env.get(key), (str, int)) or not str(env[key]).strip() or '$' in str(env[key]) for key in legacy_required):
         raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
     if env['GOTP_DB_PSQL_HOST'] == 'postgres' and not isinstance(services.get('postgres'), dict):
         raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
+    relational_required = (
+        'GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST', 'GOTP_RELATIONAL_POSTGRES_PLATFORM_PORT',
+        'GOTP_RELATIONAL_POSTGRES_PLATFORM_DATABASE', 'GOTP_RELATIONAL_POSTGRES_PLATFORM_USERNAME',
+        'GOTP_RELATIONAL_POSTGRES_PLATFORM_PASSWORD',
+    )
+    relational_keys = [key for key in env if key.startswith('GOTP_RELATIONAL_')]
+    if relational_keys:
+        if env.get('GOTP_RELATIONAL_DRIVER') != 'postgres' or any(
+            not isinstance(env.get(key), (str, int)) or not str(env[key]).strip() or '$' in str(env[key])
+            for key in relational_required
+        ):
+            raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
+        if env['GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST'] == 'postgres' and not isinstance(services.get('postgres'), dict):
+            raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
     for key, value in env.items():
         upper = str(key).upper()
         if upper.startswith(('GOTP_DB_MYSQL_', 'GOTP_DB_MARIADB_')) and value not in (None, ''):
             raise RuntimeError('A MySQL backend is not supported by this installer')
-        if upper in ('GOTP_DB_PSQL_DBTYPE', 'GOTP_DB_DRIVER', 'GOTP_DB_PROVIDER', 'GOTP_DB_TYPE', 'DB_DRIVER', 'DB_PROVIDER', 'DB_TYPE', 'DATABASE_TYPE', 'DATABASE_PROVIDER', 'DATABASE_DRIVER') and str(value).lower() not in ('postgres', 'postgresql', 'pg'):
+        if upper in ('GOTP_RELATIONAL_DRIVER', 'GOTP_DB_PSQL_DBTYPE', 'GOTP_DB_DRIVER', 'GOTP_DB_PROVIDER', 'GOTP_DB_TYPE', 'DB_DRIVER', 'DB_PROVIDER', 'DB_TYPE', 'DATABASE_TYPE', 'DATABASE_PROVIDER', 'DATABASE_DRIVER') and str(value).lower() not in ('postgres', 'postgresql', 'pg'):
             raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
         if upper == 'DATABASE_URL' and (not isinstance(value, str) or urlsplit(value).scheme not in ('postgres', 'postgresql')):
             raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')

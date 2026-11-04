@@ -100,12 +100,21 @@ services:
     - ${TP_PORT_BACKEND:-9999}:9999
     environment:
     - TZ=Asia/Shanghai
+    # Keep the legacy keys while the published v1.3.0 backend image is in use.
+    # A1 builds read relational.* and ignore the retired db.psql.* keys.
     - GOTP_DB_PSQL_HOST=postgres
     - GOTP_DB_PSQL_PORT=5432
     - GOTP_DB_PSQL_USERNAME=postgres
     - GOTP_DB_PSQL_PASSWORD=${TP_DATABASE_PASSWORD:-postgresThingsPanel}
     - GOTP_DB_PSQL_DBNAME=ThingsPanel
     - GOTP_DB_PSQL_LOG_LEVEL=3
+    - GOTP_RELATIONAL_DRIVER=postgres
+    - GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST=postgres
+    - GOTP_RELATIONAL_POSTGRES_PLATFORM_PORT=5432
+    - GOTP_RELATIONAL_POSTGRES_PLATFORM_DATABASE=ThingsPanel
+    - GOTP_RELATIONAL_POSTGRES_PLATFORM_USERNAME=postgres
+    - GOTP_RELATIONAL_POSTGRES_PLATFORM_PASSWORD=${TP_DATABASE_PASSWORD:-postgresThingsPanel}
+    - GOTP_RELATIONAL_POSTGRES_PLATFORM_LOG_LEVEL=3
     - GOTP_DB_REDIS_ADDR=redis:6379
     - GOTP_DB_REDIS_PASSWORD=redis
     - GOTP_MQTT_SERVER=mosquitto

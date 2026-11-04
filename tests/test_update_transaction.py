@@ -24,7 +24,13 @@ update = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(update)
 CONFIG = {'services': {'backend': {'image': 'registry/backend:v-fixture', 'environment': {
     'GOTP_DB_PSQL_HOST': 'postgres', 'GOTP_DB_PSQL_PORT': '5432',
-    'GOTP_DB_PSQL_USERNAME': 'postgres', 'GOTP_DB_PSQL_DBNAME': 'ThingsPanel'}},
+    'GOTP_DB_PSQL_USERNAME': 'postgres', 'GOTP_DB_PSQL_DBNAME': 'ThingsPanel',
+    'GOTP_RELATIONAL_DRIVER': 'postgres',
+    'GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST': 'postgres',
+    'GOTP_RELATIONAL_POSTGRES_PLATFORM_PORT': '5432',
+    'GOTP_RELATIONAL_POSTGRES_PLATFORM_DATABASE': 'ThingsPanel',
+    'GOTP_RELATIONAL_POSTGRES_PLATFORM_USERNAME': 'postgres',
+    'GOTP_RELATIONAL_POSTGRES_PLATFORM_PASSWORD': 'synthetic-fixture'}},
     'postgres': {}, 'thingsvis-server': {'environment': {
         'DATABASE_URL': 'postgresql://fixture:fixture@postgres/ThingsPanel'}}}}
 BASE = 'https://installer.invalid'
@@ -515,6 +521,46 @@ class ValidatorTests(unittest.TestCase):
                 config['services']['backend']['environment'] = ['GOTP_DB_PSQL_HOST=a', 'GOTP_DB_PSQL_HOST=b']
             with self.subTest(change=change), self.assertRaises(update.UpdateError):
                 update.validate_config(config)
+
+    def test_a1_relational_pg_profile_is_required_when_declared(self):
+        config = copy.deepcopy(CONFIG)
+        env = config['services']['backend']['environment']
+        env.update({
+            'GOTP_RELATIONAL_DRIVER': 'postgres',
+            'GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST': 'postgres',
+            'GOTP_RELATIONAL_POSTGRES_PLATFORM_PORT': '5432',
+            'GOTP_RELATIONAL_POSTGRES_PLATFORM_DATABASE': 'ThingsPanel',
+            'GOTP_RELATIONAL_POSTGRES_PLATFORM_USERNAME': 'postgres',
+            'GOTP_RELATIONAL_POSTGRES_PLATFORM_PASSWORD': 'synthetic-fixture',
+        })
+        update.validate_config(config)
+        del env['GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST']
+        with self.assertRaises(update.UpdateError):
+            update.validate_config(config)
+
+    def test_legacy_only_compose_remains_upgrade_compatible(self):
+        config = copy.deepcopy(CONFIG)
+        env = config['services']['backend']['environment']
+        for key in tuple(env):
+            if key.startswith('GOTP_RELATIONAL_'):
+                del env[key]
+        update.validate_config(config)
+
+    def test_staged_legacy_only_compose_remains_supported(self):
+        config = copy.deepcopy(CONFIG)
+        env = config['services']['backend']['environment']
+        for key in tuple(env):
+            if key.startswith('GOTP_RELATIONAL_'):
+                del env[key]
+        with tempfile.TemporaryDirectory() as directory:
+            stage = Path(directory)
+            transaction = update.Transaction(stage / 'install')
+            for relative, _ in transaction.artifacts:
+                target = stage / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((REPO / relative).read_bytes())
+            with mock.patch.object(update, 'render_with_fallback', return_value=config):
+                transaction.validate(stage, '')
 
     def test_external_compose_path_is_not_inherited_by_prepare(self):
         with mock.patch.dict(os.environ, {'COMPOSE_FILE': '/foreign/compose.yml', 'COMPOSE_ENV_FILES': '/foreign/.env', 'COMPOSE_DISABLE_ENV_FILE': '1'}):

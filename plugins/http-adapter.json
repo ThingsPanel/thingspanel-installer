@@ -33,5 +33,8 @@
   "uplink_port": 19091,
   "uplink_path": "/api/v1/uplink",
   "api_key_env": "P_SERVER_HTTP_API_KEY"
+ },
+ "identity": {
+  "token_env": "P_PLATFORM_API_TOKEN"
  }
 }

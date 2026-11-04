@@ -19,13 +19,28 @@
   "TP_MQTT_PASS": "TP_PROTOCOL_MQTT_PASSWORD"
  },
  "env_user": {
-  "HA_BASE_URL": {"required": true, "secret": false, "description": "Home Assistant base URL, e.g. http://homeassistant.local:8123"},
-  "HA_ACCESS_TOKEN": {"required": true, "secret": true, "description": "Home Assistant long-lived access token"}
+  "HA_BASE_URL": {
+   "required": true,
+   "secret": false,
+   "description": "Home Assistant base URL, e.g. http://homeassistant.local:8123",
+   "validate": "url"
+  },
+  "HA_ACCESS_TOKEN": {
+   "required": true,
+   "secret": true,
+   "description": "Home Assistant long-lived access token"
+  }
  },
- "health": {"port": 9001, "path": "/health"},
+ "health": {
+  "port": 9001,
+  "path": "/health"
+ },
  "platform": {
   "binding": "none",
   "service_identifier": "homeassistant",
   "http_port": 9001
+ },
+ "identity": {
+  "token_env": "TP_PLUGIN_RUNTIME_TOKEN"
  }
 }

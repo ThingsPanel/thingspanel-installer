@@ -17,18 +17,80 @@ What it does, in order (each step is idempotent; re-running installs the next ge
 The Agent lease is at most 24 hours; run `plugin_install.py renew` from cron (or any scheduler) to extend it.
 """
 import argparse
+import getpass
 import json
 import os
 from pathlib import Path
 import secrets
 import subprocess
 import sys
+import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import plugin_catalog  # noqa: E402
+
+DEFAULT_TOKEN_ENV = 'TP_PLUGIN_RUNTIME_TOKEN'
+SERVICE_ENV = 'TP_PLUGIN_SERVICE_IDENTIFIER'
+
+
+def binding_of(entry):
+    return entry['platform'].get('binding', 'template')
+
+
+def service_identifier(entry):
+    spec = entry['platform']
+    return spec.get('service_identifier') or spec['protocol_type']
+
+
+def token_env_of(entry):
+    return (entry.get('identity') or {}).get('token_env', DEFAULT_TOKEN_ENV)
+
+
+def collect_user_env(entry, assignments, interactive):
+    """Resolve the catalog's env_user fields. Order: --set KEY=VALUE, an environment variable named KEY, the entry's
+    default, then (only on a terminal) a prompt. Secret fields are never accepted on the command line, never echoed."""
+    specs = entry.get('env_user', {})
+    given = {}
+    for item in assignments or []:
+        key, sep, value = item.partition('=')
+        if not sep or key not in specs:
+            raise RuntimeError('--set %s: expected KEY=VALUE with KEY one of: %s' % (key or item, ', '.join(specs) or 'none'))
+        if specs[key].get('secret'):
+            raise RuntimeError('%s is a secret: pass it in the environment variable %s or type it at the prompt, not with --set' % (key, key))
+        given[key] = value
+    values = {}
+    for key, spec in specs.items():
+        value = given.get(key)
+        if value is None:
+            value = os.environ.get(key)
+        if not value:
+            value = spec.get('default')
+        if not value and interactive:
+            label = '%s (%s)%s: ' % (key, spec.get('description', ''), '' if spec.get('required') else ' [optional]')
+            value = getpass.getpass(label) if spec.get('secret') else input(label)
+        if not value:
+            if spec.get('required'):
+                raise RuntimeError('%s is required (%s); pass --set %s=... or set the environment variable %s%s' % (
+                    key, spec.get('description', ''), key, key, '' if not spec.get('secret') else ' (secret: environment variable or prompt only)'))
+            continue
+        values[key] = check_user_value(key, spec, value)
+    return values
+
+
+def check_user_value(key, spec, value):
+    if any(ch in value for ch in '\n\r\0'):
+        raise RuntimeError('%s must be a single line' % key)
+    if spec.get('validate') == 'url':
+        parsed = urllib.parse.urlparse(value)
+        if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+            raise RuntimeError('%s must be an http(s) URL, got %r' % (key, value if not spec.get('secret') else '<hidden>'))
+    if spec.get('pattern') and not re.fullmatch(spec['pattern'], value):
+        raise RuntimeError('%s does not match the required format' % key)
+    return value
 
 
 def sh(args, check=True, cwd=None, env=None, timeout=300):
@@ -80,6 +142,13 @@ class Agent:
         os.chmod(profiles, 0o600)
         sh(['docker', 'restart', self.name])
         time.sleep(3)
+
+    def scrub(self, profile):
+        """Rewrite profiles.json without the runtime token once the container holds it (no restart: the Agent
+        keeps its loaded copy; the next install writes a fresh profile before it prepares anything)."""
+        profiles = self.dir / 'profiles.json'
+        profiles.write_text(json.dumps([profile]))
+        os.chmod(profiles, 0o600)
 
     def ensure_running(self, profile):
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -159,27 +228,59 @@ def reload_broker(stack_dir, web_url):
     wait_web(web_url)
 
 
-def agent_install(agent, entry, state, state_path, platform=None, profile=None):
+def with_identity(profile, entry, token):
+    """A copy of the profile that carries the runtime identity (token + service identifier) in its environment."""
+    drop = (token_env_of(entry) + '=', SERVICE_ENV + '=')
+    env = [e for e in profile['env'] if not e.startswith(drop)]
+    return dict(profile, env=env + ['%s=%s' % (token_env_of(entry), token), '%s=%s' % (SERVICE_ENV, service_identifier(entry))])
+
+
+def issue_identity(platform, entry, generation):
+    """Ask the platform for the identity of this generation; a higher generation revokes every lower one."""
+    try:
+        issued = platform.must('/api/v1/plugin/runtime/identity', {'plugin_instance': entry['id'], 'service_identifier': service_identifier(entry),
+                                                                   'generation': generation, 'ttl_hours': 24})
+    except RuntimeError as error:
+        if '409' in str(error):
+            raise RuntimeError('the platform already has generation >= %d for %s (installer state lost or edited?); '
+                               'restore %s or pick a state with a higher generation' % (generation, entry['id'], 'the Agent plugin state file'))
+        raise
+    return issued['token']
+
+
+def revoke_identity(platform, entry):
+    return platform.must('/api/v1/plugin/runtime/identity/revoke', {'plugin_instance': entry['id']})
+
+
+def agent_install(agent, entry, state, state_path, platform, profile):
+    """Install or upgrade to the next generation: issue the identity first, hand it to the new container only through
+    the Agent profile environment (never the image, never a log line), then drop the token from disk again."""
     generation = int(state.get('generation', 0)) + 1
     key = 'install-%d' % generation
-    if state.get('generation'):
-        agent.ctl('/v1/revoke', instance=entry['id'], generation=state['generation'], reason='replaced by generation %d' % generation)
-    if platform is not None:
-        # The platform issues one revocable identity per generation; a higher generation revokes every lower one.
-        issued = platform.must('/api/v1/plugin/runtime/identity', {'plugin_instance': entry['id'], 'service_identifier': entry['platform']['protocol_type'],
-                                                                   'generation': generation, 'ttl_hours': 24})
-        profile['env'] = [e for e in profile['env'] if not e.startswith('P_PLATFORM_API_TOKEN=')] + ['P_PLATFORM_API_TOKEN=' + issued['token']]
-        agent.write_profile(profile)
-    agent.ctl('/v1/accept-generation', instance=entry['id'], generation=generation)
-    if state.get('generation'):
-        agent.ctl('/v1/retire', instance=entry['id'], generation=state['generation'])
-    agent.ctl('/v1/prepare', instance=entry['id'], generation=generation, request_key=key, profile=entry['id'])
-    agent.ctl('/v1/grant', instance=entry['id'], generation=generation, request_key=key, grant_id='grant-%d' % generation, ttl_seconds=86400)
-    agent.ctl('/v1/activate', instance=entry['id'], generation=generation, request_key=key)
+    token = issue_identity(platform, entry, generation)
+    try:
+        if state.get('generation') and state.get('active', True):
+            agent.ctl('/v1/revoke', instance=entry['id'], generation=state['generation'], reason='replaced by generation %d' % generation)
+        agent.write_profile(with_identity(profile, entry, token))
+        agent.ctl('/v1/accept-generation', instance=entry['id'], generation=generation)
+        if state.get('generation') and state.get('active', True):
+            agent.ctl('/v1/retire', instance=entry['id'], generation=state['generation'])
+        agent.ctl('/v1/prepare', instance=entry['id'], generation=generation, request_key=key, profile=entry['id'])
+        agent.ctl('/v1/grant', instance=entry['id'], generation=generation, request_key=key, grant_id='grant-%d' % generation, ttl_seconds=86400)
+        agent.ctl('/v1/activate', instance=entry['id'], generation=generation, request_key=key)
+    except Exception:
+        try:
+            revoke_identity(platform, entry)  # do not leave a live identity that no container holds
+        except Exception:  # noqa: BLE001 - best effort, the original error matters more
+            pass
+        raise
+    finally:
+        agent.scrub(profile)
     state['generation'] = generation
     state['request_key'] = key
+    state['active'] = True
     state_path.write_text(json.dumps(state))
-    print('    generation %d is running' % generation)
+    print('    generation %d is running with a fresh runtime identity' % generation)
     time.sleep(8)
 
 
@@ -191,6 +292,17 @@ def uplink(args, entry, state, network, device_number, values=None):
     return sh(['docker', 'run', '--rm', '--network', network, '--entrypoint', 'sh', args.agent_image, '-c',
                "wget -q -O- -T 10 --header 'Content-Type: application/json' --header 'X-Api-Key: %s' --post-data '%s' http://%s:%d%s 2>&1 | tail -1"
                % (key, body, ip, spec['uplink_port'], spec['uplink_path'])], check=False).stdout.strip()
+
+
+def bind_template(platform, entry, state, generated):
+    spec = entry['platform']
+    if not state.get('config_id'):
+        created = platform.must('/api/v1/device_config', {'name': spec['template_name'], 'device_type': spec['device_type'],
+                                                          'protocol_type': spec['protocol_type'], 'device_conn_type': 'A'})
+        state['config_id'] = created['id']
+    platform.must('/api/v1/device_config', {'id': state['config_id'], 'name': spec['template_name'],
+                                            'template_secret': generated[spec['secret_env']], 'auto_register': 1}, 'PUT')
+    print('    device template %s (protocol %s), auto registration on' % (state['config_id'][:8], spec['protocol_type']))
 
 
 def install(args):
@@ -217,18 +329,19 @@ def install(args):
     email, password = os.environ.get('TP_TENANT_EMAIL'), os.environ.get('TP_TENANT_PASSWORD')
     if not email or not password:
         raise RuntimeError('set TP_TENANT_EMAIL and TP_TENANT_PASSWORD (never put them in a file)')
+    if args.device and binding_of(entry) == 'none':
+        raise RuntimeError('--device needs a protocol template; %s has binding: none' % entry['id'])
     platform = Platform(args.web_url, email, password)
-    say('creating the platform-side binding')
-    spec = entry['platform']
-    if not state.get('config_id'):
-        created = platform.must('/api/v1/device_config', {'name': spec['template_name'], 'device_type': spec['device_type'],
-                                                          'protocol_type': spec['protocol_type'], 'device_conn_type': 'A'})
-        state['config_id'] = created['id']
-    platform.must('/api/v1/device_config', {'id': state['config_id'], 'name': spec['template_name'],
-                                            'template_secret': generated[spec['secret_env']], 'auto_register': 1}, 'PUT')
-    print('    device template %s (protocol %s), auto registration on' % (state['config_id'][:8], spec['protocol_type']))
+    user_env = collect_user_env(entry, args.set, sys.stdin.isatty() and not args.non_interactive)
+    if binding_of(entry) == 'none':
+        say('no platform-side protocol template for this plugin (binding: none)')
+    else:
+        say('creating the platform-side binding')
+        bind_template(platform, entry, state, generated)
 
     device_number = args.device
+    if device_number and binding_of(entry) == 'none':
+        raise RuntimeError('--device needs a protocol template; %s has binding: none' % entry['id'])
 
     say('installing through the Agent')
     stack_env = read_env(stack / '.env')
@@ -236,6 +349,7 @@ def install(args):
     for target, source in entry.get('env_from_stack', {}).items():
         env.append('%s=%s' % (target, stack_env[source]))
     env += ['%s=%s' % item for item in generated.items()]
+    env += ['%s=%s' % item for item in user_env.items()]
     profile = {'name': entry['id'], 'image_id': entry['image_id'], 'entrypoint': entry['entrypoint'], 'args': entry.get('args', []),
                'network': args.network or '%s_thingspanel_network' % project, 'reviewed_image_metadata': True, 'env': env}
     state_path.write_text(json.dumps(state))
@@ -265,12 +379,18 @@ def container_ip(project_network, generation):
 
 def check(args, stack, platform, entry, state):
     say('checking that it works')
-    spec = entry['platform']
     project = project_of(stack)
     network = args.network or '%s_thingspanel_network' % project
     time.sleep(8)
     name, ip = container_ip(network, state['generation'])
-    print('    plugin container %s is running (the platform blocks the legacy heartbeat endpoint, so liveness is checked on the container)' % name[-8:])
+    print('    plugin container %s is running' % name[-8:])
+    health = entry.get('health')
+    if health:
+        answer = sh(['docker', 'run', '--rm', '--network', network, '--entrypoint', 'sh', args.agent_image, '-c',
+                     'wget -q -O- -T 5 http://%s:%d%s 2>&1 | tail -c 200' % (ip, health['port'], health['path'])], check=False).stdout.strip()
+        print('    health %s:%d%s -> %s' % (name[-8:], health['port'], health['path'], answer))
+        if '"ok"' not in answer and 'ok' not in answer.lower():
+            raise RuntimeError('plugin container is up but its health check did not answer ok')
     if not state.get('device_number'):
         return
     result = uplink(args, entry, state, network, state['device_number'], {'temp': 33.3, 'hum': 77})
@@ -290,9 +410,33 @@ def renew(args):
     print('lease extended by 24 hours')
 
 
+def uninstall(args):
+    """Stop the plugin container and revoke its runtime identity. The generation counter stays in the state file so a
+    later install issues a strictly higher generation (a revoked generation can never be reused)."""
+    state_path = Path(args.agent_dir) / 'plugins' / (args.plugin + '.json')
+    if not state_path.exists():
+        raise RuntimeError('%s is not installed (no state file)' % args.plugin)
+    state = json.loads(state_path.read_text())
+    email, password = os.environ.get('TP_TENANT_EMAIL'), os.environ.get('TP_TENANT_PASSWORD')
+    if not email or not password:
+        raise RuntimeError('set TP_TENANT_EMAIL and TP_TENANT_PASSWORD (never put them in a file)')
+    platform = Platform(args.web_url, email, password)
+    agent = Agent(args, project_of(args.stack_dir))
+    if state.get('active', True) and state.get('generation'):
+        say('revoking generation %d in the Agent' % state['generation'])
+        agent.ctl('/v1/revoke', instance=args.plugin, generation=state['generation'], reason='uninstalled')
+        agent.ctl('/v1/retire', instance=args.plugin, generation=state['generation'])
+    say('revoking the runtime identity on the platform')
+    revoked = revoke_identity(platform, {'id': args.plugin})
+    print('    revoked identities: %s' % (revoked or {}).get('revoked'))
+    state['active'] = False
+    state_path.write_text(json.dumps(state))
+    print('uninstalled %s (generation %s stays reserved)' % (args.plugin, state.get('generation')))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('command', choices=['install', 'renew'])
+    parser.add_argument('command', choices=['install', 'renew', 'uninstall'])
     parser.add_argument('--catalog')
     parser.add_argument('--trust-root')
     parser.add_argument('--plugin', required=True)
@@ -304,9 +448,11 @@ def main():
     parser.add_argument('--agent-image', default='registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.3.0')
     parser.add_argument('--network')
     parser.add_argument('--device')
+    parser.add_argument('--set', action='append', default=[], metavar='KEY=VALUE', help='non-secret plugin setting (env_user); secrets come from the environment variable KEY or a prompt')
+    parser.add_argument('--non-interactive', action='store_true', help='never prompt; fail when a required setting is missing')
     args = parser.parse_args()
     try:
-        (install if args.command == 'install' else renew)(args)
+        {'install': install, 'renew': renew, 'uninstall': uninstall}[args.command](args)
     except Exception as error:  # noqa: BLE001 - CLI boundary
         print('error: %s' % error, file=sys.stderr)
         return 1

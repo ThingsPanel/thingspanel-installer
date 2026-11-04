@@ -36,6 +36,19 @@ def check_entry(entry):
             raise ValueError('plugin entry is missing ' + key)
     if not str(entry['image_id']).startswith('sha256:') or len(entry['image_id']) != 71:
         raise ValueError('image_id must be an immutable sha256 image ID')
+    platform = entry['platform']
+    binding = platform.get('binding', 'template')
+    if binding not in ('template', 'none'):
+        raise ValueError('platform.binding must be "template" or "none"')
+    if binding == 'template':
+        for key in ('protocol_type', 'device_type', 'template_name', 'secret_env'):
+            if key not in platform:
+                raise ValueError('platform.' + key + ' is required when binding is template')
+    elif not platform.get('service_identifier'):
+        raise ValueError('platform.service_identifier is required when binding is none')
+    for name, spec in entry.get('env_user', {}).items():
+        if not isinstance(spec, dict) or spec.get('validate') not in (None, 'url'):
+            raise ValueError('env_user.%s: unsupported spec' % name)
     if entry['kind'] != 'service':
         raise ValueError('only service plugins are supported by this installer')
 

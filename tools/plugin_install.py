@@ -443,7 +443,8 @@ def keep_scope_in_sync(args, stack):
     platform UI are picked up by a detached watcher (tools/scope_sync.py), no manual command."""
     say('keeping the Broker device scope in step with the platform')
     ok, output = scope_sync.run_once(stack)
-    print('    %s' % (output.splitlines()[-1] if output else ('ok' if ok else 'failed')))
+    lines = [line for line in output.splitlines() if 'scope' in line]
+    print('    %s' % (lines[-1] if lines else ('ok' if ok else 'failed')))
     if not ok:
         raise RuntimeError('the Broker device scope could not be refreshed: %s' % output)
     print('    watcher: %s (log %s)' % (scope_sync.ensure(stack, args.agent_dir), Path(args.agent_dir) / 'scope-sync.log'))

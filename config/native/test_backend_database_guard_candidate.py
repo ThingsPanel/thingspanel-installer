@@ -37,6 +37,28 @@ class BackendDatabaseGuard(unittest.TestCase):
     def test_shipped_pg_compose_is_accepted(self):
         self.check(self.config)
 
+    def test_shipped_backend_has_matching_a1_postgres_settings(self):
+        env = self.config['services']['backend']['environment']
+        self.assertEqual(env['GOTP_RELATIONAL_DRIVER'], 'postgres')
+        self.assertEqual(env['GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST'], 'postgres')
+        self.assertEqual(env['GOTP_RELATIONAL_POSTGRES_PLATFORM_PORT'], '5432')
+        self.assertEqual(env['GOTP_RELATIONAL_POSTGRES_PLATFORM_DATABASE'], 'ThingsPanel')
+        self.assertEqual(env['GOTP_RELATIONAL_POSTGRES_PLATFORM_USERNAME'], 'postgres')
+
+    def test_a1_profile_missing_required_setting_is_rejected(self):
+        cfg = copy.deepcopy(self.config)
+        del cfg['services']['backend']['environment']['GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST']
+        with self.assertRaisesRegex(RuntimeError, 'Cannot confirm'):
+            self.check(cfg)
+
+    def test_legacy_only_compose_remains_upgrade_compatible(self):
+        cfg = copy.deepcopy(self.config)
+        env = cfg['services']['backend']['environment']
+        for key in tuple(env):
+            if key.startswith('GOTP_RELATIONAL_'):
+                del env[key]
+        self.check(cfg)
+
     def test_explicit_mysql_backend_with_pg_vis_is_rejected(self):
         cfg = copy.deepcopy(self.config)
         cfg['services']['backend']['environment']['GOTP_DB_MYSQL_HOST'] = 'synthetic-mysql'
@@ -106,6 +128,7 @@ class BackendDatabaseGuard(unittest.TestCase):
     def test_external_pg_host_not_rejected_merely_for_missing_local_service(self):
         cfg=copy.deepcopy(self.config)
         cfg['services']['backend']['environment']['GOTP_DB_PSQL_HOST']='synthetic-external-pg'
+        cfg['services']['backend']['environment']['GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST']='synthetic-external-pg'
         del cfg['services']['postgres']
         self.check(cfg)
 

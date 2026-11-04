@@ -247,7 +247,8 @@ def validate_config(config):
     try:
         services = config['services']
         vis = environment(services['thingsvis-server']['environment'])
-        backend = environment(services['backend']['environment'])
+        backend_service = services['backend']
+        backend = environment(backend_service['environment'])
         url = vis['DATABASE_URL']
         parsed = urlsplit(url)
         if parsed.scheme not in ('postgres', 'postgresql') or not parsed.hostname or '$' in parsed.hostname:
@@ -257,7 +258,18 @@ def validate_config(config):
             raise ValueError()
         if backend['GOTP_DB_PSQL_HOST'] == 'postgres' and not isinstance(services.get('postgres'), dict):
             raise ValueError()
-        selectors = ('GOTP_DB_PSQL_DBTYPE', 'GOTP_DB_DRIVER', 'GOTP_DB_PROVIDER', 'GOTP_DB_TYPE',
+        relational_required = ('GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST', 'GOTP_RELATIONAL_POSTGRES_PLATFORM_PORT',
+                               'GOTP_RELATIONAL_POSTGRES_PLATFORM_DATABASE', 'GOTP_RELATIONAL_POSTGRES_PLATFORM_USERNAME',
+                               'GOTP_RELATIONAL_POSTGRES_PLATFORM_PASSWORD')
+        relational_keys = [key for key in backend if key.startswith('GOTP_RELATIONAL_')]
+        if relational_keys:
+            if backend.get('GOTP_RELATIONAL_DRIVER') != 'postgres':
+                raise ValueError()
+            if any(not isinstance(backend.get(k), (str, int)) or not str(backend[k]).strip() or '$' in str(backend[k]) for k in relational_required):
+                raise ValueError()
+            if backend['GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST'] == 'postgres' and not isinstance(services.get('postgres'), dict):
+                raise ValueError()
+        selectors = ('GOTP_RELATIONAL_DRIVER', 'GOTP_DB_PSQL_DBTYPE', 'GOTP_DB_DRIVER', 'GOTP_DB_PROVIDER', 'GOTP_DB_TYPE',
                      'DB_DRIVER', 'DB_PROVIDER', 'DB_TYPE', 'DATABASE_TYPE', 'DATABASE_PROVIDER', 'DATABASE_DRIVER')
         for key, value in backend.items():
             name = str(key).upper()

@@ -447,7 +447,19 @@ def keep_scope_in_sync(args, stack):
     print('    %s' % (lines[-1] if lines else ('ok' if ok else 'failed')))
     if not ok:
         raise RuntimeError('the Broker device scope could not be refreshed: %s' % output)
-    print('    watcher: %s (log %s)' % (scope_sync.ensure(stack, args.agent_dir), Path(args.agent_dir) / 'scope-sync.log'))
+    status = ensure_scope_watcher(stack, args.agent_dir)
+    print('    watcher: %s (log %s)' % (status, Path(args.agent_dir) / 'scope-sync.log'))
+
+
+def ensure_scope_watcher(stack, agent_dir, attempts=60, interval=5, sleep=time.sleep):
+    """Wait for an overlapping update to release the lock before install/renew returns success."""
+    for attempt in range(attempts):
+        status = scope_sync.ensure(stack, agent_dir)
+        if status != 'busy':
+            return status
+        if attempt + 1 < attempts:
+            sleep(interval)
+    raise RuntimeError('the installer update lock stayed busy; scope watcher was not started; retry install or renew')
 
 
 def container_ip(project_network, generation):
@@ -491,7 +503,7 @@ def renew(args):
     agent.ctl('/v1/grant', instance=args.plugin, generation=state['generation'], request_key=state['request_key'],
               grant_id='renew-%d' % int(time.time()), ttl_seconds=86400)
     print('lease extended by 24 hours')
-    print('scope watcher: %s' % scope_sync.ensure(args.stack_dir, args.agent_dir))
+    print('scope watcher: %s' % ensure_scope_watcher(args.stack_dir, args.agent_dir))
 
 
 def uninstall(args):

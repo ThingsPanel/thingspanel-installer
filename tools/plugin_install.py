@@ -261,9 +261,11 @@ def agent_install(agent, entry, state, state_path, platform, profile):
     try:
         if state.get('generation') and state.get('active', True):
             agent.ctl('/v1/revoke', instance=entry['id'], generation=state['generation'], reason='replaced by generation %d' % generation)
+        # The Agent keeps the previous generation's container resource until the new generation is accepted and the
+        # old one is retired (the takeover step); that also holds after an uninstall (revoked, never retired).
         agent.write_profile(with_identity(profile, entry, token))
         agent.ctl('/v1/accept-generation', instance=entry['id'], generation=generation)
-        if state.get('generation') and state.get('active', True):
+        if state.get('generation'):
             agent.ctl('/v1/retire', instance=entry['id'], generation=state['generation'])
         agent.ctl('/v1/prepare', instance=entry['id'], generation=generation, request_key=key, profile=entry['id'])
         agent.ctl('/v1/grant', instance=entry['id'], generation=generation, request_key=key, grant_id='grant-%d' % generation, ttl_seconds=86400)
@@ -425,7 +427,6 @@ def uninstall(args):
     if state.get('active', True) and state.get('generation'):
         say('revoking generation %d in the Agent' % state['generation'])
         agent.ctl('/v1/revoke', instance=args.plugin, generation=state['generation'], reason='uninstalled')
-        agent.ctl('/v1/retire', instance=args.plugin, generation=state['generation'])
     say('revoking the runtime identity on the platform')
     revoked = revoke_identity(platform, {'id': args.plugin})
     print('    revoked identities: %s' % (revoked or {}).get('revoked'))

@@ -115,9 +115,16 @@ type dockerHostConfig struct {
 	Tmpfs             map[string]string
 	Sysctls           map[string]string
 }
+type dockerEndpointConfig struct {
+	Aliases []string `json:",omitempty"`
+}
+type dockerNetworkingConfig struct {
+	EndpointsConfig map[string]dockerEndpointConfig
+}
 type dockerCreateRequest struct {
 	dockerConfig
-	HostConfig dockerHostConfig
+	HostConfig       dockerHostConfig
+	NetworkingConfig *dockerNetworkingConfig `json:",omitempty"`
 }
 type dockerContainer struct {
 	ID           string `json:"Id"`
@@ -137,11 +144,19 @@ type dockerContainer struct {
 	Mounts          []json.RawMessage
 	NetworkSettings struct {
 		Ports    map[string]json.RawMessage
-		Networks map[string]json.RawMessage
+		Networks map[string]struct{ Aliases []string }
 	}
 }
 
 func preparationCreate(record containerPreparation, host string) dockerCreateRequest {
+	request := preparationCreateBase(record, host)
+	if alias := record.Profile.NetworkAlias; alias != "" {
+		request.NetworkingConfig = &dockerNetworkingConfig{EndpointsConfig: map[string]dockerEndpointConfig{record.Profile.Network: {Aliases: []string{alias}}}}
+	}
+	return request
+}
+
+func preparationCreateBase(record containerPreparation, host string) dockerCreateRequest {
 	return dockerCreateRequest{
 		dockerConfig: dockerConfig{Image: record.Profile.ImageID, User: "65534:65534", WorkingDir: "/", Entrypoint: []string{record.Profile.Entrypoint}, Cmd: append([]string{}, record.Profile.Args...), Env: append([]string{preparationPath}, record.Profile.Env...), Labels: record.labels(host), Volumes: map[string]json.RawMessage{}, ExposedPorts: map[string]json.RawMessage{}, Healthcheck: dockerHealthcheck{Test: []string{"NONE"}}, NetworkDisabled: record.Profile.Network == ""},
 		HostConfig:   dockerHostConfig{NetworkMode: preparedNetwork(record.Profile), ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, RestartPolicy: dockerRestartPolicy{Name: "no"}, IpcMode: "none", CgroupnsMode: "private", Memory: preparationMemory, NanoCPUs: preparationNanoCPUs, PidsLimit: preparationPids, LogConfig: dockerLogConfig{Type: "none"}, Binds: []string{}, Mounts: []json.RawMessage{}, Devices: []json.RawMessage{}, DeviceRequests: []json.RawMessage{}, PortBindings: map[string]json.RawMessage{}},

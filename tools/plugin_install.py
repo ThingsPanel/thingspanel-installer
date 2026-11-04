@@ -46,6 +46,64 @@ def service_identifier(entry):
     return spec.get('service_identifier') or spec['protocol_type']
 
 
+ALIAS_RE = re.compile(r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?')
+
+
+def network_alias(entry):
+    """Stable DNS alias of the plugin container on the stack network; the same for every generation."""
+    alias = (entry.get('platform') or {}).get('network_alias') or 'tp-plugin-' + entry['id']
+    if not ALIAS_RE.fullmatch(alias):
+        raise ValueError('invalid network alias %r (lowercase letters, digits and - only)' % alias)
+    return alias
+
+
+def service_plugin_config(entry):
+    """The service_config the platform should hold for this plugin: the catalog's declared fields with {alias} and
+    {http_port} filled in. The installer only fills values; which fields exist is the catalog's decision."""
+    spec = (entry['platform'].get('service_plugin') or {})
+    values = {'alias': network_alias(entry), 'http_port': entry['platform'].get('http_port', '')}
+    return {key: (value.format(**values) if isinstance(value, str) else value) for key, value in (spec.get('config') or {}).items()}
+
+
+def list_service_plugins(platform, service_type, page_size=100):
+    """All service_plugins rows of a type (the list API requires paging)."""
+    rows, page = [], 1
+    while True:
+        data = platform.must('/api/v1/service/list?service_type=%d&page=%d&page_size=%d' % (service_type, page, page_size)) or {}
+        batch = data.get('list') or []
+        rows += batch
+        if not batch or len(rows) >= int(data.get('total', 0)) or page >= 50:
+            return rows
+        page += 1
+
+
+def ensure_service_plugin(platform, entry):
+    """Idempotently register the plugin in service_plugins through the platform API. Looks the row up by
+    service_identifier; creates it once, and on every later install only refreshes the declared fields (so a changed
+    address converges, and a repeat install never creates a second row). Returns (id, 'created' | 'updated')."""
+    spec = entry['platform'].get('service_plugin')
+    if not spec:
+        return None, 'skipped'
+    identifier = service_identifier(entry)
+    config = service_plugin_config(entry)
+    existing = [row for row in list_service_plugins(platform, spec.get('service_type', 2)) if row.get('service_identifier') == identifier]
+    body = {'name': spec.get('name', entry['id']), 'service_identifier': identifier, 'service_type': spec.get('service_type', 2),
+            'version': entry['version'], 'description': spec.get('description', entry.get('description', ''))[:255]}
+    if existing:
+        row = existing[0]
+        try:
+            merged = json.loads(row.get('service_config') or '{}')
+        except ValueError:
+            merged = {}
+        merged.update(config)
+        body.update({'id': row['id'], 'service_config': json.dumps(merged, sort_keys=True), 'remark': row.get('remark') or ''})
+        platform.must('/api/v1/service', body, 'PUT')
+        return row['id'], 'updated'
+    body['service_config'] = json.dumps(config, sort_keys=True)
+    created = platform.must('/api/v1/service', body)
+    return (created or {}).get('id'), 'created'
+
+
 def token_env_of(entry):
     return (entry.get('identity') or {}).get('token_env', DEFAULT_TOKEN_ENV)
 
@@ -337,6 +395,9 @@ def install(args):
     user_env = collect_user_env(entry, args.set, sys.stdin.isatty() and not args.non_interactive)
     if binding_of(entry) == 'none':
         say('no platform-side protocol template for this plugin (binding: none)')
+        plugin_id, outcome = ensure_service_plugin(platform, entry)
+        if outcome != 'skipped':
+            print('    service plugin %s %s (address %s)' % (str(plugin_id)[:8], outcome, service_plugin_config(entry).get('http_address', '-')))
     else:
         say('creating the platform-side binding')
         bind_template(platform, entry, state, generated)
@@ -353,7 +414,8 @@ def install(args):
     env += ['%s=%s' % item for item in generated.items()]
     env += ['%s=%s' % item for item in user_env.items()]
     profile = {'name': entry['id'], 'image_id': entry['image_id'], 'entrypoint': entry['entrypoint'], 'args': entry.get('args', []),
-               'network': args.network or '%s_thingspanel_network' % project, 'reviewed_image_metadata': True, 'env': env}
+               'network': args.network or '%s_thingspanel_network' % project, 'network_alias': network_alias(entry),
+               'reviewed_image_metadata': True, 'env': env}
     state_path.write_text(json.dumps(state))
     os.chmod(state_path, 0o600)
     agent = Agent(args, project)
@@ -391,6 +453,11 @@ def check(args, stack, platform, entry, state):
         answer = sh(['docker', 'run', '--rm', '--network', network, '--entrypoint', 'sh', args.agent_image, '-c',
                      'wget -q -O- -T 5 http://%s:%d%s 2>&1 | tail -c 200' % (ip, health['port'], health['path'])], check=False).stdout.strip()
         print('    health %s:%d%s -> %s' % (name[-8:], health['port'], health['path'], answer))
+        alias_answer = sh(['docker', 'run', '--rm', '--network', network, '--entrypoint', 'sh', args.agent_image, '-c',
+                           'wget -q -O- -T 5 http://%s:%d%s 2>&1 | tail -c 200' % (network_alias(entry), health['port'], health['path'])], check=False).stdout.strip()
+        print('    health via stable alias %s -> %s' % (network_alias(entry), alias_answer))
+        if 'ok' not in alias_answer.lower():
+            raise RuntimeError('the stable alias %s does not reach the plugin container' % network_alias(entry))
         if '"ok"' not in answer and 'ok' not in answer.lower():
             raise RuntimeError('plugin container is up but its health check did not answer ok')
     if not state.get('device_number'):
@@ -432,7 +499,7 @@ def uninstall(args):
     print('    revoked identities: %s' % (revoked or {}).get('revoked'))
     state['active'] = False
     state_path.write_text(json.dumps(state))
-    print('uninstalled %s (generation %s stays reserved)' % (args.plugin, state.get('generation')))
+    print('uninstalled %s (generation %s stays reserved; the service_plugins row is kept on purpose)' % (args.plugin, state.get('generation')))
 
 
 def main():

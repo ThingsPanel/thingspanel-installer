@@ -41,6 +41,9 @@ type PreparationProfile struct {
 	Network               string   `json:"network,omitempty"`
 	Env                   []string `json:"env,omitempty"`
 	ReviewedImageMetadata bool     `json:"reviewed_image_metadata,omitempty"`
+	// NetworkAlias is a stable DNS alias on Network (e.g. tp-plugin-homeassistant), so the address the
+	// platform registers survives container replacement across generations. Requires Network.
+	NetworkAlias string `json:"network_alias,omitempty"`
 }
 
 type PrepareContainerRequest struct {
@@ -119,6 +122,9 @@ func newDockerPreparer(store *Store, engine preparationEngine, profiles []Prepar
 }
 
 func validPreparationProfile(p PreparationProfile) bool {
+	if p.NetworkAlias != "" && (p.Network == "" || !validNetworkAlias(p.NetworkAlias)) {
+		return false
+	}
 	if !valid(p.Name) || len(p.Name) > 128 || !validImageID(p.ImageID) || !strings.HasPrefix(p.Entrypoint, "/") || !valid(p.Entrypoint) || len(p.Entrypoint) > 1024 || len(p.Args) > 32 {
 		return false
 	}
@@ -453,8 +459,34 @@ func safePreparedContainer(container dockerContainer, record containerPreparatio
 	if len(limits.Binds) != 0 || len(limits.Mounts) != 0 || len(limits.Devices) != 0 || len(limits.DeviceRequests) != 0 || len(limits.DeviceCgroupRules) != 0 || len(limits.VolumesFrom) != 0 || len(limits.PortBindings) != 0 || len(limits.Links) != 0 || len(limits.ExtraHosts) != 0 || len(limits.GroupAdd) != 0 || len(limits.Tmpfs) != 0 || len(limits.Sysctls) != 0 || len(container.Mounts) != 0 || len(container.NetworkSettings.Ports) != 0 {
 		return false
 	}
-	for network := range container.NetworkSettings.Networks {
+	for network, endpoint := range container.NetworkSettings.Networks {
 		if network != preparedNetwork(record.Profile) {
+			return false
+		}
+		if alias := record.Profile.NetworkAlias; alias != "" && !containsString(endpoint.Aliases, alias) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsString(list []string, want string) bool {
+	for _, item := range list {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+// validNetworkAlias accepts a conservative DNS label.
+func validNetworkAlias(alias string) bool {
+	if alias == "" || len(alias) > 63 {
+		return false
+	}
+	for i, c := range alias {
+		ok := c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' && i > 0 && i < len(alias)-1
+		if !ok {
 			return false
 		}
 	}

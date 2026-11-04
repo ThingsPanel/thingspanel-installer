@@ -13,6 +13,7 @@ A plugin entry (see plugin_install.py) pins one local/registry image by its immu
 import argparse
 import importlib.util
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -46,6 +47,17 @@ def check_entry(entry):
                 raise ValueError('platform.' + key + ' is required when binding is template')
     elif not platform.get('service_identifier'):
         raise ValueError('platform.service_identifier is required when binding is none')
+    alias = platform.get('network_alias')
+    if alias is not None and not re.fullmatch(r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?', alias):
+        raise ValueError('platform.network_alias must be a lowercase DNS label')
+    service_plugin = platform.get('service_plugin')
+    if service_plugin is not None:
+        if binding != 'none':
+            raise ValueError('platform.service_plugin is only for binding none')
+        if not isinstance(service_plugin.get('config'), dict) or not service_plugin.get('name'):
+            raise ValueError('platform.service_plugin needs name and a config object')
+        if 'http_address' in service_plugin['config'] and 'http_port' not in platform:
+            raise ValueError('service_plugin.config.http_address needs platform.http_port')
     for name, spec in entry.get('env_user', {}).items():
         if not isinstance(spec, dict) or spec.get('validate') not in (None, 'url'):
             raise ValueError('env_user.%s: unsupported spec' % name)

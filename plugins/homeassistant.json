@@ -1,9 +1,9 @@
 {
  "id": "homeassistant",
- "version": "1.0.0-t5",
+ "version": "1.0.0-t7c",
  "kind": "service",
  "description": "Home Assistant device connector: HA state_changed events become ThingsPanel telemetry, platform commands call HA services.",
- "image_id": "sha256:f7a78a7e32ceb6b5f72f3f3de634e32040e695346c519713125d744324e93d08",
+ "image_id": "sha256:43984ca468277669bbd3df0b43dbf1cdea27d192f2e5bbbd2f576aba821bcdf9",
  "image_platform": "linux/arm64",
  "entrypoint": "/usr/local/bin/homeassistant-service",
  "args": [],
@@ -38,7 +38,16 @@
  "platform": {
   "binding": "none",
   "service_identifier": "homeassistant",
-  "http_port": 9001
+  "http_port": 9001,
+  "service_plugin": {
+   "name": "Home Assistant",
+   "service_type": 2,
+   "description": "Home Assistant device connector (installed by the plugin installer)",
+   "config": {
+    "sub_topic_prefix": "plugin/homeassistant/",
+    "http_address": "{alias}:{http_port}"
+   }
+  }
  },
  "identity": {
   "token_env": "TP_PLUGIN_RUNTIME_TOKEN"

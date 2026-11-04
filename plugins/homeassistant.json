@@ -1,0 +1,31 @@
+{
+ "id": "homeassistant",
+ "version": "1.0.0-t6",
+ "kind": "service",
+ "description": "Home Assistant device connector: HA state_changed events become ThingsPanel telemetry, platform commands call HA services.",
+ "image_id": "sha256:ee93832cc57d93424f050f359e9bc716ff2dddfaff6075ddbb4b20d3132fcbba",
+ "image_platform": "linux/arm64",
+ "entrypoint": "/usr/local/bin/homeassistant-service",
+ "args": [],
+ "env": [
+  "CONNECTOR_SERVICE_IDENTIFIER=homeassistant",
+  "CONNECTOR_INSTANCE_ID=homeassistant-1",
+  "THINGSPANEL_BACKEND_URL=http://backend:9999",
+  "TP_MQTT_BROKER=tcp://mosquitto:1883",
+  "LOG_LEVEL=info"
+ ],
+ "env_from_stack": {
+  "TP_MQTT_USER": "TP_PROTOCOL_MQTT_USER",
+  "TP_MQTT_PASS": "TP_PROTOCOL_MQTT_PASSWORD"
+ },
+ "env_user": {
+  "HA_BASE_URL": {"required": true, "secret": false, "description": "Home Assistant base URL, e.g. http://homeassistant.local:8123"},
+  "HA_ACCESS_TOKEN": {"required": true, "secret": true, "description": "Home Assistant long-lived access token"}
+ },
+ "health": {"port": 9001, "path": "/health"},
+ "platform": {
+  "binding": "none",
+  "service_identifier": "homeassistant",
+  "http_port": 9001
+ }
+}

@@ -19,6 +19,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import scope_sync  # noqa: E402
+
 DEFAULT_IMAGE = 'registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.3.0'
 
 
@@ -77,6 +80,14 @@ def up(args):
     else:
         raise RuntimeError('the Agent did not create its socket; see: docker logs ' + name)
     print('Agent %s is up; the platform backend mounts %s as /run/tp-agent' % (name, run))
+    # Devices a user adds in the platform only work once the Broker scope lists them: keep it in step (host process).
+    status = None
+    for _ in range(60):
+        status = scope_sync.ensure(stack, agent_dir)
+        if status != 'busy':
+            break
+        time.sleep(5)
+    print('Broker scope watcher: %s (log %s)' % (status, agent_dir / 'scope-sync.log'))
 
 
 def down(args):

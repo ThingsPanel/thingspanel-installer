@@ -22,8 +22,9 @@ CELL = 'community'
 INSTANCE = 'community-mosquitto'
 CLIENT = 'tp-community-backend'
 _UPDATE_FILES = None
-# sql/33.sql: managed plugin runtime identities (T4). Not applied by the backend's own startup migrations.
-EXTRA_COMMUNITY_SQL = ('33.sql',)
+# sql/33.sql: managed plugin runtime identities (T4); sql/34.sql: plugin installation records, sql/35.sql: its tenant menu entry (PLUGIN-UI).
+# Not applied by the backend's own startup migrations.
+EXTRA_COMMUNITY_SQL = ('33.sql', '34.sql', '35.sql')
 EXTRA_COMMUNITY_COMPONENT = 'community-ext'
 
 

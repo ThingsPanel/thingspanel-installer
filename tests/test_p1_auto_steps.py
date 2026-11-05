@@ -244,7 +244,7 @@ class ExtraMigrationTests(unittest.TestCase):
             prepare.apply_migrations('ThingsPanel', prepare.EXTRA_COMMUNITY_COMPONENT, [self.file])
 
     def test_the_extra_list_names_the_plugin_identity_schema_only(self):
-        self.assertEqual(prepare.EXTRA_COMMUNITY_SQL, ('33.sql',))
+        self.assertEqual(prepare.EXTRA_COMMUNITY_SQL, ('33.sql', '34.sql', '35.sql'))
 
 
 class BootstrapAppliesExtraSqlTests(unittest.TestCase):
@@ -267,6 +267,8 @@ class BootstrapAppliesExtraSqlTests(unittest.TestCase):
                         (target / 'broker' / '001_x.sql').write_text('select 1;')
                         if with_33:
                             (target / '33.sql').write_text('select 33;')
+                            (target / '34.sql').write_text('select 34;')
+                            (target / '35.sql').write_text('select 35;')
                     elif source.endswith('global.go'):
                         target.write_text('VERSION_NUMBER = 0\n')
                     else:
@@ -281,7 +283,7 @@ class BootstrapAppliesExtraSqlTests(unittest.TestCase):
                     mock.patch.object(prepare, 'sql', return_value='0'), \
                     mock.patch.object(prepare, 'apply_migrations', side_effect=apply):
                 prepare.bootstrap()
-            self.assertEqual(applied[0], (prepare.EXTRA_COMMUNITY_COMPONENT, ['33.sql'] if with_33 else []), with_33)
+            self.assertEqual(applied[0], (prepare.EXTRA_COMMUNITY_COMPONENT, ['33.sql', '34.sql', '35.sql'] if with_33 else []), with_33)
             self.assertEqual(applied[1], ('broker', ['001_x.sql']))
 
 

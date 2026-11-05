@@ -279,6 +279,7 @@ class BootstrapAppliesExtraSqlTests(unittest.TestCase):
 
             with mock.patch.object(prepare, 'command', side_effect=command), \
                     mock.patch.object(prepare, 'sql', return_value='0'), \
+                    mock.patch.object(prepare, 'image_has_marker', return_value=with_33), \
                     mock.patch.object(prepare, 'apply_migrations', side_effect=apply):
                 prepare.bootstrap()
             self.assertEqual(applied[0], (prepare.EXTRA_COMMUNITY_COMPONENT, ['33.sql'] if with_33 else []), with_33)

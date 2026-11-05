@@ -15,40 +15,65 @@ spec.loader.exec_module(prepare)
 IMAGE = 'registry.example/thingspanel-go:test'
 
 
+ID, INSTALL = 'internal/pluginidentity', 'internal/plugininstall'
+
+
 class RequiredExtraSqlTests(unittest.TestCase):
-    def community(self, with_file):
+    def community(self, *files):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
-        if with_file: (root / '33.sql').write_text('SELECT 1;')
+        for name in files: (root / name).write_text('SELECT 1;')
         return root
 
-    def test_new_image_with_file_is_applied(self):
-        root = self.community(True)
-        self.assertEqual(prepare.required_extra_sql(root, True, IMAGE), [root / '33.sql'])
+    def names(self, paths):
+        return [p.name for p in paths]
 
-    def test_new_image_missing_file_fails_naming_file_and_image(self):
-        with self.assertRaises(RuntimeError) as ctx:
-            prepare.required_extra_sql(self.community(False), True, IMAGE)
-        self.assertIn('sql/33.sql', str(ctx.exception))
-        self.assertIn(IMAGE, str(ctx.exception))
-
-    def test_old_image_without_file_is_skipped_with_log(self):
+    def test_identity_only_image_requires_and_applies_only_33(self):
+        # Regression: an image with plugin identity but no plugin-install feature must not be rejected for 34/35.
+        root = self.community('33.sql')
         out = io.StringIO()
         with redirect_stdout(out):
-            self.assertEqual(prepare.required_extra_sql(self.community(False), False, IMAGE), [])
-        self.assertIn('skipping sql/33.sql', out.getvalue())
+            self.assertEqual(self.names(prepare.required_extra_sql(root, {ID}, IMAGE)), ['33.sql'])
+        self.assertIn('predates internal/plugininstall; skipping sql/34.sql', out.getvalue())
 
-    def test_old_image_that_has_the_file_still_applies_it(self):
-        root = self.community(True)
-        self.assertEqual(prepare.required_extra_sql(root, False, IMAGE), [root / '33.sql'])
+    def test_image_with_both_markers_requires_and_applies_33_to_35(self):
+        root = self.community('33.sql', '34.sql', '35.sql')
+        self.assertEqual(self.names(prepare.required_extra_sql(root, {ID, INSTALL}, IMAGE)), ['33.sql', '34.sql', '35.sql'])
+
+    def test_install_marker_with_missing_34_fails_naming_file_and_image(self):
+        root = self.community('33.sql', '35.sql')
+        with self.assertRaises(RuntimeError) as ctx:
+            prepare.required_extra_sql(root, {ID, INSTALL}, IMAGE)
+        self.assertIn('sql/34.sql', str(ctx.exception))
+        self.assertNotIn('sql/35.sql', str(ctx.exception))
+        self.assertIn(IMAGE, str(ctx.exception))
+
+    def test_identity_marker_with_missing_33_fails(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            prepare.required_extra_sql(self.community(), {ID}, IMAGE)
+        self.assertIn('sql/33.sql', str(ctx.exception))
+
+    def test_old_image_without_files_is_skipped_with_log(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(prepare.required_extra_sql(self.community(), set(), IMAGE), [])
+        self.assertIn('skipping sql/33.sql', out.getvalue())
+        self.assertIn('skipping sql/35.sql', out.getvalue())
+
+    def test_image_with_files_but_without_markers_still_applies_them(self):
+        root = self.community('33.sql')
+        self.assertEqual(self.names(prepare.required_extra_sql(root, set(), IMAGE)), ['33.sql'])
+
+    def test_every_extra_file_belongs_to_exactly_one_marker(self):
+        self.assertEqual(sorted(prepare.EXTRA_COMMUNITY_SQL), ['33.sql', '34.sql', '35.sql'])
 
 
 class MarkerProbeTests(unittest.TestCase):
     def probe(self, code, err=b''):
         result = subprocess.CompletedProcess([], code, b'', err)
         with mock.patch.object(prepare.subprocess, 'run', return_value=result):
-            return prepare.image_has_marker('c1')
+            return prepare.image_has_marker('c1', ID)
 
     def test_marker_present(self):
         self.assertTrue(self.probe(0))

@@ -26,7 +26,19 @@
 - `python3 -m unittest discover -s tests`：120 个，**14 个错误，全部在 `tests/test_download_failure.py`**（install/upgrade 的 shell 脚本在本机超过测试内置的 20 秒超时）。**这些错误不是本改动引起**：在未改动的 develop `4a8f286` 干净检出上单独跑同一用例（`test_upgrade_each_download_failure_preserves_old_files`）同样失败（超时）。除这 14 个外，其余 106 个通过，含新增 7 个。
 - 因此任务要求的“全部通过”**未达成**：`test_download_failure` 在本机是已存在的环境性失败，未在这里修。
 
+## 真实镜像验证（只读，未起栈，未碰运行中的容器）
+脚本对每个镜像 `docker create` → `image_has_marker()` → 取 `/go/src/app/sql` → `required_extra_sql()`；日志：`/Volumes/KIOXIA/archive/evidence/2026-11-05-PH1-S2/real-image-verify.log`。
+
+| 镜像 | 标记 | 结果 |
+|---|---|---|
+| `…/thingspanel-go:v1.3.0` | 无（真实报错 `Could not find the file /go/src/app/internal/pluginidentity in container …`，被正确识别为“不存在”） | 旧镜像，跳过并记日志，应用 `[]` |
+| `thingspanel-go:mvp-run-a29fecc` | 有 | 新镜像，取到 `33.sql`，应用 `['33.sql']` |
+| `thingspanel-go:p1-local` | **无**（其 `internal/` 里没有 `pluginidentity`，但 `sql/33.sql` 存在） | 判为旧镜像，但因文件存在仍应用 `['33.sql']` |
+| 由 mvp-run-a29fecc 派生、删掉 `sql/33.sql` 的临时镜像 | 有 | **失败**：`…contains internal/pluginidentity but is missing required migration sql/33.sql; the image was packaged incorrectly. Refusing to continue.` 临时镜像已删除 |
+
+**发现的局限（需总监知晓）**：`p1-local` 带 `33.sql` 却没有 `internal/pluginidentity`（只有 SQL，Go 代码是更早的版本）。对它，当前逻辑安全（文件在就应用），但如果将来有“只带旧 Go 代码、却漏了 `33.sql`”的这类中间镜像，会被当成旧镜像静默跳过——标记只能识别带完整插件身份源码的镜像。要覆盖这种情况只能改用发行清单声明迁移列表（需改后端发布流程），本卡未做。
+
 ## 没做
-- 未用真实 Docker/镜像做端到端验证（单元测试用 mock，不能当端到端验收）。`docker cp` 对不存在路径的报错措辞（“could not find the file”）按 Docker 常见行为匹配，需在真实镜像上确认一次。
+- 未跑完整 `bootstrap()` 端到端（不起栈、不连数据库）；探测与取文件逻辑已在真实镜像上验证，见上。
 - 若后端以后重命名/移除 `internal/pluginidentity`，需同步修改 `EXTRA_SQL_MARKER`。
 - 未推送、未合并。

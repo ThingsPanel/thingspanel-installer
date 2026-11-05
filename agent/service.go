@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -22,6 +23,16 @@ type Service struct {
 	preparer  *DockerPreparer
 	activator *Activator
 	token     []byte
+	catalog   *CatalogSource
+	builder   ProfileBuilder
+}
+
+// EnableCatalog turns on the catalog-driven install path: the Agent verifies the signed catalog itself, builds the
+// container profile from the verified entry, and keeps all secrets in its own store. The caller (control plane) can
+// only name a catalog id, hand over site values and a one-shot identity token.
+func (s *Service) EnableCatalog(catalog *CatalogSource, builder ProfileBuilder) {
+	s.catalog, s.builder = catalog, builder
+	s.preparer.SetSecrets(builder.Secrets)
 }
 
 func NewService(store *Store, preparer *DockerPreparer, activator *Activator, token string) (*Service, error) {
@@ -39,6 +50,13 @@ type apiRequest struct {
 	GrantID    string `json:"grant_id"`
 	TTLSeconds int64  `json:"ttl_seconds"`
 	Reason     string `json:"reason"`
+
+	// Catalog install path only.
+	Key               string            `json:"key"`
+	Value             string            `json:"value"`
+	Values            map[string]string `json:"values"`
+	IdentityToken     string            `json:"identity_token"`
+	ServiceIdentifier string            `json:"service_identifier"`
 }
 
 type apiResponse struct {
@@ -47,6 +65,8 @@ type apiResponse struct {
 	Preparation *PreparationObservation `json:"preparation,omitempty"`
 	Activation  *ActivationRecord `json:"activation,omitempty"`
 	Stopped     []string          `json:"stopped,omitempty"`
+	Catalog     []PublicEntry     `json:"catalog,omitempty"`
+	Keys        []string          `json:"keys,omitempty"`
 }
 
 func (s *Service) Handler() http.Handler {
@@ -60,6 +80,10 @@ func (s *Service) Handler() http.Handler {
 		"/v1/retire":            s.retire,
 		"/v1/status":            s.status,
 		"/v1/sweep":             s.sweep,
+		"/v1/catalog":           s.listCatalog,
+		"/v1/config-put":        s.configPut,
+		"/v1/config-keys":       s.configKeys,
+		"/v1/config-clear":      s.configClear,
 	}
 	for path, handle := range routes {
 		handle := handle
@@ -114,7 +138,7 @@ func statusFor(err error) int {
 		errors.Is(err, ErrLeaseExpired), errors.Is(err, ErrNotGranted), errors.Is(err, ErrNotPrepared),
 		errors.Is(err, ErrResourceConflict), errors.Is(err, ErrActivationUnresolved), errors.Is(err, ErrPreparationRecoveryRequired):
 		return http.StatusConflict
-	case errors.Is(err, ErrPreparationPolicy):
+	case errors.Is(err, ErrPreparationPolicy), errors.Is(err, ErrCatalog):
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError
@@ -130,6 +154,23 @@ func (s *Service) prepare(ctx context.Context, r apiRequest) (apiResponse, error
 	if s.activator.HasStarted(r.Instance, r.Generation) {
 		record, err := s.activator.Status(r.Instance)
 		return apiResponse{Activation: &record}, err
+	}
+	if r.IdentityToken != "" {
+		if s.catalog == nil {
+			return apiResponse{}, ErrPreparationPolicy
+		}
+		entry, err := s.catalog.Entry(r.Profile)
+		if err != nil {
+			return apiResponse{}, ErrPreparationPolicy
+		}
+		profile, err := s.builder.Build(entry, r.Instance, r.Generation, r.Values, r.IdentityToken)
+		if err != nil {
+			return apiResponse{}, err
+		}
+		if err := s.preparer.SetProfile(profile); err != nil {
+			return apiResponse{}, err
+		}
+		r.Profile = profile.Name
 	}
 	observation, err := s.preparer.Prepare(ctx, PrepareContainerRequest{Instance: r.Instance, Generation: r.Generation, RequestKey: r.RequestKey, Profile: r.Profile})
 	return apiResponse{Preparation: &observation}, err
@@ -151,7 +192,78 @@ func (s *Service) revoke(ctx context.Context, r apiRequest) (apiResponse, error)
 }
 
 func (s *Service) retire(ctx context.Context, r apiRequest) (apiResponse, error) {
-	return apiResponse{}, s.activator.Retire(ctx, r.Instance, r.Generation)
+	err := s.activator.Retire(ctx, r.Instance, r.Generation)
+	if err == nil && s.builder.Secrets != nil {
+		_ = s.builder.Secrets.DeleteKey(r.Instance, fmt.Sprintf("identity/%d", r.Generation)) // the old generation's token is no longer needed
+	}
+	return apiResponse{}, err
+}
+
+func (s *Service) listCatalog(_ context.Context, _ apiRequest) (apiResponse, error) {
+	if s.catalog == nil {
+		return apiResponse{}, ErrPreparationPolicy
+	}
+	entries, err := s.catalog.Entries()
+	if err != nil {
+		return apiResponse{}, ErrCatalog
+	}
+	out := make([]PublicEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Public())
+	}
+	return apiResponse{Catalog: out}, nil
+}
+
+// declaredSecret checks that the instance is a catalog plugin and the key is one of its declared secret fields:
+// nothing else can be written into the secret store through the API.
+func (s *Service) declaredSecret(instance, key string) error {
+	if s.catalog == nil || s.builder.Secrets == nil {
+		return ErrPreparationPolicy
+	}
+	entry, err := s.catalog.Entry(instance)
+	if err != nil {
+		return ErrPreparationPolicy
+	}
+	if spec, ok := entry.EnvUser[key]; !ok || !spec.Secret {
+		return ErrPreparationPolicy
+	}
+	return nil
+}
+
+func (s *Service) configPut(_ context.Context, r apiRequest) (apiResponse, error) {
+	if err := s.declaredSecret(r.Instance, r.Key); err != nil {
+		return apiResponse{}, err
+	}
+	if err := checkSecretValue(r.Value); err != nil {
+		return apiResponse{}, err
+	}
+	return apiResponse{}, s.builder.Secrets.Put(r.Instance, "config/"+r.Key, r.Value)
+}
+
+func checkSecretValue(v string) error {
+	if v == "" || len(v) > 8192 || strings.ContainsAny(v, "\r\n\x00") {
+		return ErrPreparationPolicy
+	}
+	return nil
+}
+
+func (s *Service) configKeys(_ context.Context, r apiRequest) (apiResponse, error) {
+	if s.catalog == nil || s.builder.Secrets == nil || !valid(r.Instance) {
+		return apiResponse{}, ErrPreparationPolicy
+	}
+	return apiResponse{Keys: s.builder.Secrets.Keys(r.Instance, "config/")}, nil
+}
+
+// configClear removes the site secrets and every identity token of the instance (uninstall). Generated keys and the
+// stack credentials stay: a reinstall must keep the same generated template secret.
+func (s *Service) configClear(_ context.Context, r apiRequest) (apiResponse, error) {
+	if s.catalog == nil || s.builder.Secrets == nil || !valid(r.Instance) {
+		return apiResponse{}, ErrPreparationPolicy
+	}
+	if err := s.builder.Secrets.DeletePrefix(r.Instance, "config/"); err != nil {
+		return apiResponse{}, err
+	}
+	return apiResponse{}, s.builder.Secrets.DeletePrefix(r.Instance, "identity/")
 }
 
 func (s *Service) status(ctx context.Context, r apiRequest) (apiResponse, error) {

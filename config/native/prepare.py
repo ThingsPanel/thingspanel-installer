@@ -22,9 +22,16 @@ CELL = 'community'
 INSTANCE = 'community-mosquitto'
 CLIENT = 'tp-community-backend'
 _UPDATE_FILES = None
-# sql/33.sql: managed plugin runtime identities (T4). Not applied by the backend's own startup migrations.
-EXTRA_COMMUNITY_SQL = ('33.sql',)
+# Extra community migrations the backend's own startup does not apply. Each group is tied to the marker (source directory in the
+# same image) of the feature that ships it: marker present => every file of the group must be in the image. To add a migration,
+# add a line here (sql/33.sql: plugin runtime identities (T4); sql/34.sql + 35.sql: plugin installation records and tenant menu).
+EXTRA_SQL_REQUIREMENTS = (
+    ('internal/pluginidentity', ('33.sql',)),
+    ('internal/plugininstall', ('34.sql', '35.sql')),
+)
+EXTRA_COMMUNITY_SQL = tuple(name for _, names in EXTRA_SQL_REQUIREMENTS for name in names)
 EXTRA_COMMUNITY_COMPONENT = 'community-ext'
+# VERSION_NUMBER is not usable as the marker (it stays 25 while 33.sql exists) and image tags may be arbitrary local tags.
 
 
 def command(*args, data=None):
@@ -34,6 +41,38 @@ def command(*args, data=None):
         # example a database URL). Do not propagate either into installer logs.
         raise RuntimeError(f'Native preparation command failed (exit {result.returncode})')
     return result.stdout.decode().strip()
+
+
+def image_has_marker(container, marker):
+    """True/False when the image clearly has/lacks the marker; raises if that cannot be determined."""
+    with tempfile.TemporaryDirectory(prefix='tp-marker-') as temp:
+        result = subprocess.run(['docker', 'cp', container + ':/go/src/app/' + marker, temp + '/m'],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=ROOT)
+    if result.returncode == 0: return True
+    if b'could not find the file' in result.stderr.lower() or b'no such file' in result.stderr.lower(): return False
+    raise RuntimeError('Cannot tell whether the backend image ships ' + marker + ' (marker probe failed); refusing to guess')
+
+
+def image_markers(container):
+    return {marker for marker, _ in EXTRA_SQL_REQUIREMENTS if image_has_marker(container, marker)}
+
+
+def required_extra_sql(community, markers, image, requirements=EXTRA_SQL_REQUIREMENTS):
+    """Return the extra migration files to apply. For each group whose marker is in `markers` (the image has that feature) every
+    file must exist, otherwise fail. A group whose marker is absent is skipped with a log line; files that exist are still applied."""
+    problems, present = [], []
+    for marker, names in requirements:
+        for name in names:
+            if (community / name).is_file():
+                present.append(community / name)
+            elif marker in markers:
+                problems.append('sql/' + name + ' (image contains ' + marker + ')')
+            else:
+                print('Backend image ' + image + ' predates ' + marker + '; skipping sql/' + name, flush=True)
+    if problems:
+        raise RuntimeError('Backend image ' + image + ' is missing required migration ' + ', '.join(problems)
+                           + '; the image was packaged incorrectly. Refusing to continue.')
+    return present
 
 
 def validate_thingsvis_database(config):
@@ -483,6 +522,7 @@ def bootstrap():
         image = json.loads(image)['services']['backend']['image']
         container = command('docker', 'create', '--entrypoint', '/bin/true', image)
         try:
+            markers = image_markers(container)
             for source, target in [('sql', 'community'), ('encore-api/automation/migrations', 'automation'),
                                    ('encore-api/devicemetadata/migrations', 'device_metadata'),
                                    ('encore-api/l3-core/notification/migrations', 'notification'), ('pkg/global/global.go', 'global.go')]:
@@ -500,9 +540,8 @@ def bootstrap():
             content = (stage / 'community' / (str(number) + '.sql')).read_text()
             sql('ThingsPanel', "BEGIN; SET LOCAL lock_timeout='30s';\n" + content + "\nUPDATE sys_version SET version_number=" + str(number) + ",version='v1.3.0'; COMMIT;")
         # Schema files newer than sys_version's VERSION_NUMBER that the backend does not apply by itself at startup.
-        # Idempotent (CREATE ... IF NOT EXISTS) and checksum-recorded; an older image without the file simply skips it.
-        apply_migrations('ThingsPanel', EXTRA_COMMUNITY_COMPONENT,
-                         [stage / 'community' / name for name in EXTRA_COMMUNITY_SQL if (stage / 'community' / name).is_file()])
+        # Idempotent (CREATE ... IF NOT EXISTS) and checksum-recorded. Old image: skip + log. New image missing it: fail.
+        apply_migrations('ThingsPanel', EXTRA_COMMUNITY_COMPONENT, required_extra_sql(stage / 'community', markers, image))
         apply_migrations('ThingsPanel', 'broker', sorted((stage / 'community/broker').glob('[0-9]*.sql'), key=lambda p: int(p.name.split('_')[0])))
         for database in ['device_metadata', 'automation', 'notification']:
             if sql('postgres', "SELECT count(*) FROM pg_database WHERE datname='" + database + "'") == '0':

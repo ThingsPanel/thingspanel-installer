@@ -58,53 +58,6 @@ def network_alias(entry):
     return alias
 
 
-def service_plugin_config(entry):
-    """The service_config the platform should hold for this plugin: the catalog's declared fields with {alias} and
-    {http_port} filled in. The installer only fills values; which fields exist is the catalog's decision."""
-    spec = (entry['platform'].get('service_plugin') or {})
-    values = {'alias': network_alias(entry), 'http_port': entry['platform'].get('http_port', '')}
-    return {key: (value.format(**values) if isinstance(value, str) else value) for key, value in (spec.get('config') or {}).items()}
-
-
-def list_service_plugins(platform, service_type, page_size=100):
-    """All service_plugins rows of a type (the list API requires paging)."""
-    rows, page = [], 1
-    while True:
-        data = platform.must('/api/v1/service/list?service_type=%d&page=%d&page_size=%d' % (service_type, page, page_size)) or {}
-        batch = data.get('list') or []
-        rows += batch
-        if not batch or len(rows) >= int(data.get('total', 0)) or page >= 50:
-            return rows
-        page += 1
-
-
-def ensure_service_plugin(platform, entry):
-    """Idempotently register the plugin in service_plugins through the platform API. Looks the row up by
-    service_identifier; creates it once, and on every later install only refreshes the declared fields (so a changed
-    address converges, and a repeat install never creates a second row). Returns (id, 'created' | 'updated')."""
-    spec = entry['platform'].get('service_plugin')
-    if not spec:
-        return None, 'skipped'
-    identifier = service_identifier(entry)
-    config = service_plugin_config(entry)
-    existing = [row for row in list_service_plugins(platform, spec.get('service_type', 2)) if row.get('service_identifier') == identifier]
-    body = {'name': spec.get('name', entry['id']), 'service_identifier': identifier, 'service_type': spec.get('service_type', 2),
-            'version': entry['version'], 'description': spec.get('description', entry.get('description', ''))[:255]}
-    if existing:
-        row = existing[0]
-        try:
-            merged = json.loads(row.get('service_config') or '{}')
-        except ValueError:
-            merged = {}
-        merged.update(config)
-        body.update({'id': row['id'], 'service_config': json.dumps(merged, sort_keys=True), 'remark': row.get('remark') or ''})
-        platform.must('/api/v1/service', body, 'PUT')
-        return row['id'], 'updated'
-    body['service_config'] = json.dumps(config, sort_keys=True)
-    created = platform.must('/api/v1/service', body)
-    return (created or {}).get('id'), 'created'
-
-
 def token_env_of(entry):
     return (entry.get('identity') or {}).get('token_env', DEFAULT_TOKEN_ENV)
 
@@ -171,8 +124,8 @@ class Platform:
             raise RuntimeError('platform login failed')
         self.token = body['data']['token']
 
-    def call(self, path, data=None, method=None):
-        headers = {'Content-Type': 'application/json'}
+    def call(self, path, data=None, method=None, extra_headers=None):
+        headers = {'Content-Type': 'application/json', **(extra_headers or {})}
         if getattr(self, 'token', None):
             headers['x-token'] = self.token
         request = urllib.request.Request(self.base + path, json.dumps(data).encode() if data is not None else None, headers, method=method)
@@ -182,8 +135,8 @@ class Platform:
         except urllib.error.HTTPError as error:
             return error.code, error.read()[:200].decode('utf-8', 'replace')
 
-    def must(self, path, data=None, method=None):
-        status, body = self.call(path, data, method)
+    def must(self, path, data=None, method=None, extra_headers=None):
+        status, body = self.call(path, data, method, extra_headers)
         if status != 200 or (isinstance(body, dict) and body.get('code') not in (None, 200)):
             raise RuntimeError('platform call %s failed: %s %s' % (path, status, str(body)[:160]))
         return body.get('data') if isinstance(body, dict) else body
@@ -375,6 +328,8 @@ def install(args):
     if not matches:
         raise RuntimeError('plugin %s is not in the catalog' % args.plugin)
     entry = matches[0]
+    if binding_of(entry) == 'none':
+        return install_via_platform(args, stack, entry)
     image = sh(['docker', 'image', 'inspect', '--format', '{{.Id}}', entry['image_id']], check=False).stdout.strip()
     if image != entry['image_id']:
         raise RuntimeError('image %s is not present locally; pull it by digest first' % entry['image_id'])
@@ -390,22 +345,12 @@ def install(args):
     email, password = os.environ.get('TP_TENANT_EMAIL'), os.environ.get('TP_TENANT_PASSWORD')
     if not email or not password:
         raise RuntimeError('set TP_TENANT_EMAIL and TP_TENANT_PASSWORD (never put them in a file)')
-    if args.device and binding_of(entry) == 'none':
-        raise RuntimeError('--device needs a protocol template; %s has binding: none' % entry['id'])
     platform = Platform(args.web_url, email, password)
     user_env = collect_user_env(entry, args.set, sys.stdin.isatty() and not args.non_interactive)
-    if binding_of(entry) == 'none':
-        say('no platform-side protocol template for this plugin (binding: none)')
-        plugin_id, outcome = ensure_service_plugin(platform, entry)
-        if outcome != 'skipped':
-            print('    service plugin %s %s (address %s)' % (str(plugin_id)[:8], outcome, service_plugin_config(entry).get('http_address', '-')))
-    else:
-        say('creating the platform-side binding')
-        bind_template(platform, entry, state, generated)
+    say('creating the platform-side binding')
+    bind_template(platform, entry, state, generated)
 
     device_number = args.device
-    if device_number and binding_of(entry) == 'none':
-        raise RuntimeError('--device needs a protocol template; %s has binding: none' % entry['id'])
 
     say('installing through the Agent')
     stack_env = read_env(stack / '.env')
@@ -436,6 +381,55 @@ def install(args):
         state_path.write_text(json.dumps(state))
     check(args, stack, platform, entry, state)
     keep_scope_in_sync(args, stack)
+
+
+def wait_installation(platform, plugin_id, states, seconds=600):
+    """Poll the platform's installation record until it reaches one of `states`; print each new step once."""
+    deadline, seen = time.time() + seconds, set()
+    while time.time() < deadline:
+        rows = platform.must('/api/v1/plugin/installs') or []
+        row = next((r for r in rows if r['plugin_id'] == plugin_id), None)
+        if row:
+            mark = (row['state'], row.get('op_step'), row.get('error_code'))
+            if mark not in seen:
+                seen.add(mark)
+                print('    %s%s%s' % (row['state'], ' (' + row['op_step'] + ')' if row.get('op_step') else '',
+                                      ' ' + row['error_code'] if row.get('error_code') else ''), flush=True)
+            if row['state'] in states:
+                return row
+        time.sleep(3)
+    raise RuntimeError('timed out waiting for %s to reach %s' % (plugin_id, '/'.join(states)))
+
+
+def install_via_platform(args, stack, entry):
+    """Install a plugin through the platform's own installation API: the same engine the UI uses, so there is one
+    implementation of the flow. The Agent must already be running in catalog mode (tools/agent_host.py up)."""
+    email, password = os.environ.get('TP_TENANT_EMAIL'), os.environ.get('TP_TENANT_PASSWORD')
+    if not email or not password:
+        raise RuntimeError('set TP_TENANT_EMAIL and TP_TENANT_PASSWORD (never put them in a file)')
+    platform = Platform(args.web_url, email, password)
+    values = collect_user_env(entry, args.set, sys.stdin.isatty() and not args.non_interactive)
+    say('asking the platform to install %s' % entry['id'])
+    platform.must('/api/v1/plugin/installs', {'plugin_id': entry['id'], 'config': values}, extra_headers={'Idempotency-Key': secrets.token_hex(16)})
+    row = wait_installation(platform, entry['id'], ('enabled', 'failed', 'pending_config'))
+    if row['state'] != 'enabled':
+        raise RuntimeError('installation ended in state %s (%s)' % (row['state'], row.get('error_code') or 'see the platform page'))
+    print('    generation %s, health %s' % (row['generation'], row['health']))
+    keep_scope_in_sync(args, stack)
+
+
+def uninstall_via_platform(args):
+    email, password = os.environ.get('TP_TENANT_EMAIL'), os.environ.get('TP_TENANT_PASSWORD')
+    if not email or not password:
+        raise RuntimeError('set TP_TENANT_EMAIL and TP_TENANT_PASSWORD (never put them in a file)')
+    platform = Platform(args.web_url, email, password)
+    rows = platform.must('/api/v1/plugin/installs') or []
+    row = next((r for r in rows if r['plugin_id'] == args.plugin), None)
+    if not row:
+        raise RuntimeError('%s is not installed' % args.plugin)
+    platform.must('/api/v1/plugin/installs/' + row['id'], None, 'DELETE')
+    wait_installation(platform, args.plugin, ('uninstalled', 'failed'))
+    print('uninstalled %s (its generation stays reserved; the service_plugins row is kept on purpose)' % args.plugin)
 
 
 def keep_scope_in_sync(args, stack):
@@ -498,6 +492,11 @@ def check(args, stack, platform, entry, state):
 
 
 def renew(args):
+    if not (Path(args.agent_dir) / 'plugins' / (args.plugin + '.json')).exists():
+        # Installed through the platform: its engine renews the Agent lease and the identity by itself.
+        print('%s is managed by the platform; renewal is automatic' % args.plugin)
+        print('scope watcher: %s' % ensure_scope_watcher(args.stack_dir, args.agent_dir))
+        return
     state = json.loads((Path(args.agent_dir) / 'plugins' / (args.plugin + '.json')).read_text())
     agent = Agent(args, project_of(args.stack_dir))
     agent.ctl('/v1/grant', instance=args.plugin, generation=state['generation'], request_key=state['request_key'],
@@ -511,7 +510,7 @@ def uninstall(args):
     later install issues a strictly higher generation (a revoked generation can never be reused)."""
     state_path = Path(args.agent_dir) / 'plugins' / (args.plugin + '.json')
     if not state_path.exists():
-        raise RuntimeError('%s is not installed (no state file)' % args.plugin)
+        return uninstall_via_platform(args)
     state = json.loads(state_path.read_text())
     email, password = os.environ.get('TP_TENANT_EMAIL'), os.environ.get('TP_TENANT_PASSWORD')
     if not email or not password:

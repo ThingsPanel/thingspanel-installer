@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -28,6 +29,11 @@ func main() {
 	tokenFile := flag.String("token-file", "", "file holding the control-plane bearer token (mode 0600, >= 32 bytes)")
 	dockerSocket := flag.String("docker-socket", "/var/run/docker.sock", "local Docker Engine socket")
 	profilesFile := flag.String("profiles", "", "JSON array of reviewed preparation profiles")
+	catalogFile := flag.String("catalog", "", "signed plugin catalog (plugin-catalog.json, with .sig beside it): enables the catalog install API")
+	trustRoot := flag.String("trust-root", "", "ECDSA P-256 public key (PEM) that must have signed the catalog")
+	secretsFile := flag.String("secrets", "", "secret store file (mode 0600); default: secrets.json next to the state file")
+	stackEnv := flag.String("stack-env", "", "the stack's .env file; catalog env_from_stack values are read from it")
+	network := flag.String("network", "", "existing user-defined Docker network the catalog plugins join")
 	sweep := flag.Duration("sweep-interval", 5*time.Second, "lease/generation sweep cadence")
 	flag.Parse()
 	if *initState != "" {
@@ -39,17 +45,19 @@ func main() {
 		}
 		return
 	}
-	if *statePath == "" || *socket == "" || *tokenFile == "" || *profilesFile == "" {
-		log.Fatal("-state, -socket, -token-file and -profiles are required")
+	if *statePath == "" || *socket == "" || *tokenFile == "" || (*profilesFile == "" && *catalogFile == "") {
+		log.Fatal("-state, -socket, -token-file and one of -profiles or -catalog are required")
 	}
 	token, err := readToken(*tokenFile)
 	if err != nil {
 		log.Fatal(err)
 	}
 	var profiles []agent.PreparationProfile
-	raw, err := os.ReadFile(*profilesFile)
-	if err != nil || json.Unmarshal(raw, &profiles) != nil {
-		log.Fatal("profiles file is missing or invalid")
+	if *profilesFile != "" {
+		raw, err := os.ReadFile(*profilesFile)
+		if err != nil || json.Unmarshal(raw, &profiles) != nil {
+			log.Fatal("profiles file is missing or invalid")
+		}
 	}
 	store, err := agent.Open(*statePath)
 	if err != nil {
@@ -70,6 +78,43 @@ func main() {
 	service, err := agent.NewService(store, preparer, activator, token)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *catalogFile != "" {
+		if *trustRoot == "" || *network == "" {
+			log.Fatal("-catalog needs -trust-root and -network")
+		}
+		source, err := agent.NewCatalogSource(*catalogFile, *trustRoot)
+		if err != nil {
+			log.Fatalf("catalog trust root: %v", err)
+		}
+		secretsPath := *secretsFile
+		if secretsPath == "" {
+			secretsPath = filepath.Join(filepath.Dir(*statePath), "secrets.json")
+		}
+		secrets, err := agent.OpenSecretStore(secretsPath)
+		if err != nil {
+			log.Fatalf("secret store: %v", err)
+		}
+		builder := agent.ProfileBuilder{Secrets: secrets, Network: *network, StackEnv: func() (map[string]string, error) {
+			if *stackEnv == "" {
+				return nil, fmt.Errorf("-stack-env is not configured")
+			}
+			return agent.ReadEnvFile(*stackEnv)
+		}}
+		service.EnableCatalog(source, builder)
+		if entries, err := source.Entries(); err == nil {
+			vouched := map[string]agent.CatalogEntry{}
+			for _, e := range entries {
+				vouched[e.ID] = e
+			}
+			_ = preparer.AdoptRecorded(func(p agent.PreparationProfile) bool {
+				id, _, _ := strings.Cut(p.Name, ".g")
+				e, ok := vouched[id]
+				return ok && e.ImageID == p.ImageID && e.Entrypoint == p.Entrypoint
+			})
+		} else {
+			log.Printf("catalog is not usable yet: %v", err)
+		}
 	}
 	if info, err := os.Lstat(*socket); err == nil && info.Mode()&os.ModeSocket != 0 {
 		_ = os.Remove(*socket) // stale socket of a previous run of this Agent

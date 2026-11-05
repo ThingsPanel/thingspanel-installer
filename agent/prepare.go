@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 var (
@@ -89,6 +90,71 @@ type DockerPreparer struct {
 	store    *Store
 	engine   preparationEngine
 	profiles map[string]PreparationProfile
+	profMu   sync.RWMutex
+	secrets  *SecretStore
+}
+
+// SetSecrets enables "@secret:" placeholders in profile environments (resolved only at create/verify time).
+func (p *DockerPreparer) SetSecrets(s *SecretStore) { p.secrets = s }
+
+func (p *DockerPreparer) profile(name string) (PreparationProfile, bool) {
+	p.profMu.RLock()
+	defer p.profMu.RUnlock()
+	profile, ok := p.profiles[name]
+	return profile, ok
+}
+
+// SetProfile registers a profile built by the Agent from the verified catalog. Names are unique per generation.
+func (p *DockerPreparer) SetProfile(profile PreparationProfile) error {
+	if !validPreparationProfile(profile) {
+		return ErrPreparationPolicy
+	}
+	p.profMu.Lock()
+	defer p.profMu.Unlock()
+	if existing, found := p.profiles[profile.Name]; found && !reflect.DeepEqual(existing, profile) {
+		return ErrResourceConflict
+	}
+	profile.Args = append([]string{}, profile.Args...)
+	p.profiles[profile.Name] = profile
+	return nil
+}
+
+// AdoptRecorded re-registers, after an Agent restart, the profiles of preparations that were recorded earlier, but
+// only those the verified catalog still vouches for (same image and entrypoint) and whose recorded digest still
+// matches; anything else stays unknown and therefore untrusted.
+func (p *DockerPreparer) AdoptRecorded(vouches func(PreparationProfile) bool) error {
+	return withLock(p.store.path, func() error {
+		disk, err := load(p.store.path)
+		if err != nil {
+			return err
+		}
+		for _, record := range disk.Preparations {
+			if _, known := p.profile(record.Profile.Name); known || !vouches(record.Profile) {
+				continue
+			}
+			if preparationDigest(disk.HostID, record.request(), record.Profile) != record.PayloadHash {
+				continue
+			}
+			_ = p.SetProfile(record.Profile)
+		}
+		return nil
+	})
+}
+
+// resolved returns the record with secret placeholders replaced, for the create request and for verification only.
+func (p *DockerPreparer) resolved(record containerPreparation) (containerPreparation, error) {
+	if !hasPlaceholder(record.Profile.Env) {
+		return record, nil
+	}
+	if p.secrets == nil {
+		return record, ErrPreparationPolicy
+	}
+	env, err := p.secrets.ResolveEnv(record.Instance, record.Profile.Env)
+	if err != nil {
+		return record, err
+	}
+	record.Profile.Env = env
+	return record, nil
 }
 
 // NewDockerPreparer enables only the bounded local Docker transport. There is
@@ -101,7 +167,7 @@ func NewDockerPreparer(store *Store, engine *UnixDockerEngine, profiles []Prepar
 }
 
 func newDockerPreparer(store *Store, engine preparationEngine, profiles []PreparationProfile) (*DockerPreparer, error) {
-	if store == nil || engine == nil || len(profiles) == 0 || len(profiles) > 64 {
+	if store == nil || engine == nil || len(profiles) > 64 {
 		return nil, ErrPreparationPolicy
 	}
 	if _, err := store.HostID(); err != nil {
@@ -255,7 +321,7 @@ func (p *DockerPreparer) Prepare(ctx context.Context, request PrepareContainerRe
 	if ctx == nil || !valid(request.Instance) || !valid(request.RequestKey) || len(request.Instance) > 256 || len(request.RequestKey) > 128 || request.Generation == 0 {
 		return observation, ErrPreparationPolicy
 	}
-	profile, allowed := p.profiles[request.Profile]
+	profile, allowed := p.profile(request.Profile)
 	if !allowed {
 		return observation, ErrPreparationPolicy
 	}
@@ -302,6 +368,10 @@ func (p *DockerPreparer) Prepare(ctx context.Context, request PrepareContainerRe
 			return err
 		}
 		record := containerPreparation{Version: 1, Instance: request.Instance, Generation: request.Generation, RequestKey: request.RequestKey, Profile: profile, PayloadHash: digest, ContainerName: name, State: "intent"}
+		resolvedRecord, resolveErr := p.resolved(record) // before any state is written: a missing secret must not poison the request key
+		if resolveErr != nil {
+			return resolveErr
+		}
 		reservation := Reservation{Resource: resource, Instance: request.Instance, Generation: request.Generation, RequestKey: request.RequestKey, PayloadHash: digest, State: "held"}
 		if disk.Preparations == nil {
 			disk.Preparations = map[string]containerPreparation{}
@@ -311,7 +381,7 @@ func (p *DockerPreparer) Prepare(ctx context.Context, request PrepareContainerRe
 			return err
 		}
 		// No retry is issued on any create error, including timeout/409/5xx.
-		id, createErr := p.engine.createContainer(ctx, name, preparationCreate(record, disk.HostID))
+		id, createErr := p.engine.createContainer(ctx, name, preparationCreate(resolvedRecord, disk.HostID))
 		if createErr == nil && validHexID(id) {
 			record.ContainerID = id
 			disk.Preparations[key] = record
@@ -352,7 +422,7 @@ func (p *DockerPreparer) Query(ctx context.Context, instance string, generation 
 		if record.Generation != generation {
 			return ErrResourceConflict
 		}
-		profile, allowed := p.profiles[record.Profile.Name]
+		profile, allowed := p.profile(record.Profile.Name)
 		if !allowed || preparationDigest(disk.HostID, record.request(), profile) != record.PayloadHash {
 			return ErrPreparationPolicy
 		}
@@ -383,7 +453,7 @@ func (p *DockerPreparer) queryLocked(ctx context.Context, disk *diskState, key s
 		record.ErrorCode = "CONTAINER_NOT_OBSERVED_AFTER_INTENT"
 	}
 	if err == nil && exists {
-		if safePreparedContainer(container, record, disk.HostID) {
+		if checked, resolveErr := p.resolved(record); resolveErr == nil && safePreparedContainer(container, checked, disk.HostID) {
 			record.State, record.ErrorCode, record.ContainerID = PreparationPrepared, "", container.ID
 		} else {
 			record.ErrorCode = "CONTAINER_REQUIRES_OWNER_REVIEW"

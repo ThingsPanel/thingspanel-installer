@@ -22,8 +22,9 @@ CELL = 'community'
 INSTANCE = 'community-mosquitto'
 CLIENT = 'tp-community-backend'
 _UPDATE_FILES = None
-# sql/33.sql: managed plugin runtime identities (T4). Not applied by the backend's own startup migrations.
-EXTRA_COMMUNITY_SQL = ('33.sql',)
+# sql/33.sql: managed plugin runtime identities (T4); sql/34.sql: plugin installation records, sql/35.sql: its tenant menu entry (PLUGIN-UI).
+# Not applied by the backend's own startup migrations.
+EXTRA_COMMUNITY_SQL = ('33.sql', '34.sql', '35.sql')
 EXTRA_COMMUNITY_COMPONENT = 'community-ext'
 # Marker that tells a new image from an old one: the plugin-identity source ships in the same image as 33.sql.
 # VERSION_NUMBER is not usable (it stays 25 while 33.sql exists) and image tags may be arbitrary local tags.

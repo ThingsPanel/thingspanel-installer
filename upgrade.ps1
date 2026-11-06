@@ -27,7 +27,7 @@ $ErrorActionPreference = "Stop"
 
 $REPO     = "ThingsPanel/thingspanel-installer"
 $RAW_BASE = "https://install.thingspanel.io"
-$UPDATE_ENGINE_SHA256 = "e396477408bf0d923c571a952f7c09980161d0de8e63cecbeac884e62e819c07"
+$UPDATE_ENGINE_SHA256 = "ccbf30baaf0b32f8c9f6ab4e614d5456c2bad7936a14148c053f90ee15eab36f"
 
 function Write-Info    ($m) { Write-Host "[INFO]  $m" -ForegroundColor Cyan }
 function Write-Success ($m) { Write-Host "[OK]    $m" -ForegroundColor Green }

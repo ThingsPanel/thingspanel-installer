@@ -708,6 +708,7 @@ class Transaction:
         The journal stays ``activation_started`` unless services come up and
         native verification passes; nothing is rolled back or re-applied.
         """
+        agent_started = False
         with update_lock(self.state):
             data = self.load()
             if data is None or data['phase'] != 'activation_started':
@@ -721,14 +722,18 @@ class Transaction:
             context = {'TP_INSTALLER_ACTIVE_OPERATION': data['operation']}
             prepare = [sys.executable, str(self.root / 'config/native/prepare.py')]
             run_command(prepare + ['--bootstrap', '--refresh-devices'], self.root, extra_env=context)
-            start_plugin_agent(self.root, plugin_trust_root, verified_catalog=catalog)
+            agent_started = start_plugin_agent(self.root, plugin_trust_root, verified_catalog=catalog)
             run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], self.root)
             restart_services_with_replaced_mounts(self.root)
             run_command(prepare + ['--verify'], self.root, extra_env=context)
             data['phase'] = 'complete'
             self.save(data)
+        if agent_started:
+            start_scope_watcher_after_activation(self.root)
+        return agent_started
 
     def run(self, source, *, expected_version='', activate=None, recovery_only=False):
+        agent_started = False
         with update_lock(self.state):
             old = self.load()
             if old is not None:
@@ -746,7 +751,7 @@ class Transaction:
                     data['phase'] = 'activation_started'
                     self.save(data)
                     self.checkpoint('activation_started')
-                    activate(self.root)
+                    agent_started = bool(activate(self.root))
                     # Native preparation records its .env effect in this same
                     # journal. Preserve it when committing the outer result.
                     activated = self.load()
@@ -759,6 +764,9 @@ class Transaction:
                 if data['phase'] != 'activation_started':
                     self.recover(data)
                 raise
+        if agent_started:
+            start_scope_watcher_after_activation(self.root)
+        return agent_started
 
 
 def restart_services_with_replaced_mounts(root):
@@ -847,10 +855,11 @@ def activate_native(root, plugin_trust_root=None):
         native('--pull')
     print('Applying the existing native migration and service preparation.', flush=True)
     native('--bootstrap', '--refresh-devices')
-    start_plugin_agent(root, plugin_trust_root, verified_catalog=catalog)
+    agent_started = start_plugin_agent(root, plugin_trust_root, verified_catalog=catalog)
     run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], root)
     restart_services_with_replaced_mounts(root)
     native('--verify')
+    return agent_started
 
 
 def load_verified_plugin_catalog(root, trust_root):
@@ -973,7 +982,36 @@ def start_plugin_agent(root, plugin_trust_root=None, verified_catalog=None):
         sys.executable, str(root / 'tools/agent_host.py'), 'up',
         '--stack-dir', str(root), '--agent-dir', str(root / '.tp-agent'),
         '--agent-bin', str(agent_bin), '--catalog', str(catalog), '--trust-root', str(trust_root),
+        '--defer-scope-watcher',
     ], root)
+    return True
+
+
+def start_scope_watcher_after_activation(root):
+    """Start the optional Broker scope watcher after the transaction lock is released."""
+    root = Path(root).resolve()
+    scope_sync_path = root / 'tools/scope_sync.py'
+    spec = importlib.util.spec_from_file_location('tp_installer_scope_sync', scope_sync_path)
+    if spec is None or spec.loader is None:
+        print('[WARN] Plugin Agent is running but its Broker scope watcher could not load; retry with tools/scope_sync.py ensure.',
+              file=sys.stderr)
+        return False
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        status = module.ensure(root, root / '.tp-agent')
+    except Exception as error:  # noqa: BLE001 - watcher startup is retryable and must not fail platform activation.
+        print('[WARN] Plugin Agent is running but its Broker scope watcher did not start (%s); retry with tools/scope_sync.py ensure.' %
+              type(error).__name__, file=sys.stderr)
+        return False
+    if status == 'busy':
+        print('[WARN] Plugin Agent is running but another installer operation holds the lock; retry scope_sync.py ensure.',
+              file=sys.stderr)
+        return False
+    if status not in ('started', 'running'):
+        print('[WARN] Plugin Agent is running but its Broker scope watcher returned an unexpected status; retry scope_sync.py ensure.',
+              file=sys.stderr)
+        return False
     return True
 
 

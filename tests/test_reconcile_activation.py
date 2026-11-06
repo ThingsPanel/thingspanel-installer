@@ -79,6 +79,33 @@ class ReconcileActivation(unittest.TestCase):
         compose_index = next(i for i, args in enumerate(calls) if args[:3] == ['docker', 'compose', 'up'])
         self.assertLess(agent_index, compose_index)
 
+    def test_reconciliation_starts_scope_watcher_after_releasing_update_lock(self):
+        tx, _, _ = self.transaction()
+        started = []
+
+        def start_watcher(root):
+            self.assertEqual(Path(root).resolve(), tx.root.resolve())
+            with update.update_lock(tx.state):
+                started.append(Path(root).resolve())
+
+        with mock.patch.object(update, 'verify_plugin_agent_bundle', return_value={'plugins': [{'id': 'homeassistant'}]}), \
+                mock.patch.object(update, 'preload_homeassistant_image', return_value=True), \
+                mock.patch.object(update, 'start_plugin_agent', return_value=True), \
+                mock.patch.object(update, 'run_command'), \
+                mock.patch.object(update, 'restart_services_with_replaced_mounts', return_value=[]), \
+                mock.patch.object(update, 'start_scope_watcher_after_activation', side_effect=start_watcher):
+            self.assertTrue(tx.reconcile_activation())
+        self.assertEqual(started, [tx.root.resolve()])
+
+    def test_reconciliation_without_agent_does_not_start_scope_watcher(self):
+        tx, _, _ = self.transaction()
+        with mock.patch.object(update, 'verify_plugin_agent_bundle', return_value=False), \
+                mock.patch.object(update, 'run_command'), \
+                mock.patch.object(update, 'restart_services_with_replaced_mounts', return_value=[]), \
+                mock.patch.object(update, 'start_scope_watcher_after_activation') as watcher:
+            self.assertFalse(tx.reconcile_activation())
+        watcher.assert_not_called()
+
     def test_refuses_without_unresolved_activation(self):
         for phase in ('complete', 'recovered', 'config_committed'):
             tx, data, saved = self.transaction(phase)
@@ -135,6 +162,7 @@ class PluginAgentActivation(unittest.TestCase):
         self.assertEqual(Path(args[args.index('--agent-bin') + 1]), (root / 'bin/tp-agent').resolve())
         self.assertEqual(Path(args[args.index('--catalog') + 1]), (root / 'plugins/plugin-catalog.json').resolve())
         self.assertEqual(Path(args[args.index('--trust-root') + 1]), trust_root.resolve())
+        self.assertIn('--defer-scope-watcher', args)
 
     def test_complete_bundle_without_external_trust_root_fails_closed(self):
         root = self.root()

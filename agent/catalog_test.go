@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	haToken       = "HA-LONG-LIVED-TOKEN-xyz"
+	testSecret    = "fixture-secret-value"
 	identityToken = "pri_0123456789abcdef.0123456789abcdef0123456789abcdef0123456789abcdef"
 	mqttPass      = "mqtt-pass-123"
 )
@@ -30,8 +30,8 @@ func catalogJSON(expires int64) []byte {
 		"entrypoint": "/usr/local/bin/homeassistant-service", "env": []string{"LOG_LEVEL=info"},
 		"env_from_stack": map[string]string{"TP_MQTT_PASS": "TP_PROTOCOL_MQTT_PASSWORD"},
 		"env_user": map[string]any{
-			"HA_BASE_URL":     map[string]any{"required": true, "secret": false, "validate": "url"},
-			"HA_ACCESS_TOKEN": map[string]any{"required": true, "secret": true},
+			"SITE_BASE_URL":      map[string]any{"required": true, "secret": false, "validate": "url"},
+			"SITE_ACCESS_SECRET": map[string]any{"required": true, "secret": true},
 		},
 		"health":   map[string]any{"port": 9001, "path": "/health"},
 		"identity": map[string]any{"token_env": "TP_PLUGIN_RUNTIME_TOKEN"},
@@ -106,21 +106,21 @@ func TestCatalogInstallKeepsSecretsOutOfStateAndInjectsThemIntoTheContainer(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := builder.Build(entry, "homeassistant", 1, map[string]string{"HA_BASE_URL": "http://ha:8123"}, identityToken); err == nil {
+	if _, err := builder.Build(entry, "homeassistant", 1, map[string]string{"SITE_BASE_URL": "http://site:8123"}, identityToken); err == nil {
 		t.Fatal("a required secret that was never stored must fail the build")
 	}
-	if err := secrets.Put("homeassistant", "config/HA_ACCESS_TOKEN", haToken); err != nil {
+	if err := secrets.Put("homeassistant", "config/SITE_ACCESS_SECRET", testSecret); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := builder.Build(entry, "homeassistant", 1, map[string]string{"HA_BASE_URL": "ftp://x"}, identityToken); err == nil {
+	if _, err := builder.Build(entry, "homeassistant", 1, map[string]string{"SITE_BASE_URL": "ftp://x"}, identityToken); err == nil {
 		t.Fatal("a bad URL must be refused")
 	}
-	profile, err := builder.Build(entry, "homeassistant", 1, map[string]string{"HA_BASE_URL": "http://ha:8123"}, identityToken)
+	profile, err := builder.Build(entry, "homeassistant", 1, map[string]string{"SITE_BASE_URL": "http://site:8123"}, identityToken)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range profile.Env {
-		if strings.Contains(e, haToken) || strings.Contains(e, identityToken) || strings.Contains(e, mqttPass) {
+		if strings.Contains(e, testSecret) || strings.Contains(e, identityToken) || strings.Contains(e, mqttPass) {
 			t.Fatalf("profile carries a secret: %s", e)
 		}
 	}
@@ -147,7 +147,7 @@ func TestCatalogInstallKeepsSecretsOutOfStateAndInjectsThemIntoTheContainer(t *t
 		env = c.Config.Env
 	}
 	joined := strings.Join(env, "\n")
-	for _, want := range []string{"HA_ACCESS_TOKEN=" + haToken, "TP_PLUGIN_RUNTIME_TOKEN=" + identityToken, "TP_MQTT_PASS=" + mqttPass, "HA_BASE_URL=http://ha:8123", "TP_PLUGIN_SERVICE_IDENTIFIER=homeassistant"} {
+	for _, want := range []string{"SITE_ACCESS_SECRET=" + testSecret, "TP_PLUGIN_RUNTIME_TOKEN=" + identityToken, "TP_MQTT_PASS=" + mqttPass, "SITE_BASE_URL=http://site:8123", "TP_PLUGIN_SERVICE_IDENTIFIER=homeassistant"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("container env lacks %s", strings.SplitN(want, "=", 2)[0])
 		}
@@ -156,7 +156,7 @@ func TestCatalogInstallKeepsSecretsOutOfStateAndInjectsThemIntoTheContainer(t *t
 	files, _ := filepath.Glob(statePath + "*")
 	for _, f := range files {
 		raw, _ := os.ReadFile(f)
-		for _, s := range []string{haToken, identityToken, mqttPass} {
+		for _, s := range []string{testSecret, identityToken, mqttPass} {
 			if strings.Contains(string(raw), s) {
 				t.Fatalf("%s contains a secret", filepath.Base(f))
 			}
@@ -198,22 +198,22 @@ func TestConfigEndpointsOnlyAcceptDeclaredSecrets(t *testing.T) {
 	s := &Service{catalog: source, builder: builder}
 	ctx := context.Background()
 	for _, bad := range []apiRequest{
-		{Instance: "homeassistant", Key: "HA_BASE_URL", Value: "x"},    // declared but not secret
-		{Instance: "homeassistant", Key: "PATH", Value: "x"},           // undeclared
-		{Instance: "unknown-plugin", Key: "HA_ACCESS_TOKEN", Value: "x"}, // not in the catalog
-		{Instance: "homeassistant", Key: "HA_ACCESS_TOKEN", Value: "a\nb"},
-		{Instance: "homeassistant", Key: "HA_ACCESS_TOKEN", Value: ""},
+		{Instance: "homeassistant", Key: "SITE_BASE_URL", Value: "x"},       // declared but not secret
+		{Instance: "homeassistant", Key: "PATH", Value: "x"},                // undeclared
+		{Instance: "unknown-plugin", Key: "SITE_ACCESS_SECRET", Value: "x"}, // not in the catalog
+		{Instance: "homeassistant", Key: "SITE_ACCESS_SECRET", Value: "a\nb"},
+		{Instance: "homeassistant", Key: "SITE_ACCESS_SECRET", Value: ""},
 	} {
 		if _, err := s.configPut(ctx, bad); err == nil {
 			t.Fatalf("accepted %+v", bad)
 		}
 	}
-	if _, err := s.configPut(ctx, apiRequest{Instance: "homeassistant", Key: "HA_ACCESS_TOKEN", Value: haToken}); err != nil {
+	if _, err := s.configPut(ctx, apiRequest{Instance: "homeassistant", Key: "SITE_ACCESS_SECRET", Value: testSecret}); err != nil {
 		t.Fatal(err)
 	}
 	keys, _ := s.configKeys(ctx, apiRequest{Instance: "homeassistant"})
 	raw, _ := json.Marshal(keys)
-	if string(raw) != `{"ok":false,"keys":["HA_ACCESS_TOKEN"]}` || strings.Contains(string(raw), haToken) {
+	if string(raw) != `{"ok":false,"keys":["SITE_ACCESS_SECRET"]}` || strings.Contains(string(raw), testSecret) {
 		t.Fatalf("%s", raw)
 	}
 	secrets.Put("homeassistant", "identity/3", identityToken)

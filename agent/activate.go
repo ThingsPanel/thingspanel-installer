@@ -281,7 +281,7 @@ func (a *Activator) Renew(instance string, generation uint64, key, grantID strin
 		case record.LeaseExpires == 0 || a.now().Unix() >= record.LeaseExpires:
 			return ErrLeaseExpired
 		}
-		record.GrantID, record.LeaseExpires = grantID, a.now().Add(ttl).Unix()
+		record.LeaseExpires = a.now().Add(ttl).Unix()
 		out = *record
 		return a.saveLocked(disk)
 	})

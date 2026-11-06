@@ -29,12 +29,12 @@ func TestRenewOnlyExtendsARunningAcceptedGeneration(t *testing.T) {
 	if _, err := a.Renew("i", 1, "k", "g", time.Hour); err != ErrNotGranted {
 		t.Fatalf("never started: %v", err)
 	}
-	save(&ActivationRecord{Instance: "i", Generation: 1, RequestKey: "k", Started: true, LeaseExpires: now.Unix() + 10})
+	save(&ActivationRecord{Instance: "i", Generation: 1, RequestKey: "k", GrantID: "original-grant", Started: true, LeaseExpires: now.Unix() + 10})
 	if _, err := a.Renew("i", 1, "other", "g", time.Hour); err != ErrNotGranted {
 		t.Fatalf("other key: %v", err)
 	}
 	got, err := a.Renew("i", 1, "k", "g2", time.Hour)
-	if err != nil || got.LeaseExpires != now.Add(time.Hour).Unix() || got.GrantID != "g2" || !got.Started {
+	if err != nil || got.LeaseExpires != now.Add(time.Hour).Unix() || got.GrantID != "original-grant" || !got.Started {
 		t.Fatalf("%v %+v", err, got)
 	}
 	save(&ActivationRecord{Instance: "i", Generation: 1, RequestKey: "k", Started: true, LeaseExpires: now.Unix()})

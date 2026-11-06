@@ -70,7 +70,8 @@ class ReconcileActivation(unittest.TestCase):
             calls.append(args)
             return b''
 
-        with mock.patch.object(update, 'run_command', side_effect=fake), \
+        with mock.patch.object(update, 'load_verified_plugin_catalog', return_value={'plugins': []}), \
+                mock.patch.object(update, 'run_command', side_effect=fake), \
                 mock.patch.object(update, 'restart_services_with_replaced_mounts', return_value=[]):
             tx.reconcile_activation(str(trust_root))
         agent_index = next(i for i, args in enumerate(calls) if 'agent_host.py' in ' '.join(args))
@@ -124,13 +125,11 @@ class PluginAgentActivation(unittest.TestCase):
         root = self.root()
         self.add_bundle(root)
         trust_root = self.external_trust_root(root)
-        with mock.patch.object(update, 'run_command') as run:
+        with mock.patch.object(update, 'load_verified_plugin_catalog', return_value={'plugins': []}) as verify, \
+                mock.patch.object(update, 'run_command') as run:
             self.assertTrue(update.start_plugin_agent(root, str(trust_root)))
-        verify_args = run.call_args_list[0].args[0]
-        self.assertIn('plugin_catalog.py', ' '.join(verify_args))
-        self.assertIn('verify', verify_args)
-        self.assertEqual(Path(verify_args[verify_args.index('--trust-root') + 1]), trust_root.resolve())
-        args = run.call_args_list[1].args[0]
+        verify.assert_called_once_with(root.resolve(), trust_root.resolve())
+        args = run.call_args_list[0].args[0]
         self.assertEqual(args[1:3], [str((root / 'tools/agent_host.py').resolve()), 'up'])
         self.assertEqual(Path(args[args.index('--agent-bin') + 1]), (root / 'bin/tp-agent').resolve())
         self.assertEqual(Path(args[args.index('--catalog') + 1]), (root / 'plugins/plugin-catalog.json').resolve())
@@ -148,11 +147,11 @@ class PluginAgentActivation(unittest.TestCase):
         root = self.root()
         self.add_bundle(root)
         trust_root = self.external_trust_root(root)
-        with mock.patch.object(update, 'run_command', side_effect=update.UpdateError('bad_signature')) as run:
+        with mock.patch.object(update, 'load_verified_plugin_catalog', side_effect=update.UpdateError('bad_signature')), \
+                mock.patch.object(update, 'run_command') as run:
             with self.assertRaisesRegex(update.UpdateError, 'bad_signature'):
                 update.start_plugin_agent(root, str(trust_root))
-        self.assertEqual(run.call_count, 1)
-        self.assertIn('plugin_catalog.py', ' '.join(run.call_args.args[0]))
+        run.assert_not_called()
 
     def test_trust_root_inside_installer_payload_is_rejected(self):
         root = self.root()
@@ -177,12 +176,127 @@ class PluginAgentActivation(unittest.TestCase):
 
         operation = {'phase': 'activation_started', 'operation': 'b' * 32}
         with mock.patch.object(update.Transaction, 'load', return_value=operation), \
+                mock.patch.object(update, 'load_verified_plugin_catalog', return_value={'plugins': []}), \
                 mock.patch.object(update, 'run_command', side_effect=fake), \
                 mock.patch.object(update, 'restart_services_with_replaced_mounts', return_value=[]):
             update.activate_native(root, str(trust_root))
         agent_index = next(i for i, args in enumerate(calls) if 'agent_host.py' in ' '.join(args))
         compose_index = next(i for i, args in enumerate(calls) if args[:3] == ['docker', 'compose', 'up'])
         self.assertLess(agent_index, compose_index)
+
+    def ha_catalog(self, image_id='sha256:' + 'a' * 64, platform='linux/arm64'):
+        return {'plugins': [{'id': 'homeassistant', 'image_id': image_id, 'image_platform': platform}]}
+
+    def test_ha_image_archive_is_loaded_then_id_and_platform_are_checked(self):
+        root = self.root()
+        archive = root / 'plugins/homeassistant-image.tar'
+        archive.parent.mkdir(parents=True)
+        archive.write_bytes(b'image archive fixture')
+        image_id = 'sha256:' + 'a' * 64
+        calls = []
+
+        def fake(args, cwd, **kw):
+            calls.append(args)
+            if args[:3] == ['docker', 'info', '--format']:
+                return b'linux/arm64\n'
+            if args[:3] == ['docker', 'image', 'inspect']:
+                return (image_id + ' linux/arm64\n').encode()
+            return b'Loaded image'
+
+        with mock.patch.object(update, 'run_command', side_effect=fake):
+            self.assertTrue(update.preload_homeassistant_image(root, self.ha_catalog(image_id)))
+        self.assertEqual(calls[0][:3], ['docker', 'info', '--format'])
+        self.assertEqual(calls[1][:3], ['docker', 'load', '-i'])
+        self.assertEqual(calls[2][:4], ['docker', 'image', 'inspect', '--format'])
+
+    def test_ha_image_archive_is_required_and_missing_fails_closed(self):
+        root = self.root()
+        with mock.patch.object(update, 'run_command') as run:
+            with self.assertRaisesRegex(update.UpdateError, 'archive is missing'):
+                update.preload_homeassistant_image(root, self.ha_catalog())
+        run.assert_not_called()
+
+    def test_loaded_image_digest_mismatch_fails_closed(self):
+        root = self.root()
+        archive = root / 'plugins/homeassistant-image.tar'
+        archive.parent.mkdir(parents=True)
+        archive.write_bytes(b'image archive fixture')
+        with mock.patch.object(update, 'run_command', side_effect=[b'linux/arm64', b'Loaded', b'sha256:' + b'b' * 64 + b' linux/arm64']):
+            with self.assertRaisesRegex(update.UpdateError, 'digest or platform'):
+                update.preload_homeassistant_image(root, self.ha_catalog())
+
+    def test_catalog_architecture_mismatch_with_docker_fails_before_image_load(self):
+        root = self.root()
+        archive = root / 'plugins/homeassistant-image.tar'
+        archive.parent.mkdir(parents=True)
+        archive.write_bytes(b'image archive fixture')
+        with mock.patch.object(update, 'run_command', return_value=b'linux/amd64') as run:
+            with self.assertRaisesRegex(update.UpdateError, 'does not match Docker'):
+                update.preload_homeassistant_image(root, self.ha_catalog())
+        run.assert_called_once()
+
+    def test_catalog_verification_failure_prevents_native_activation(self):
+        root = self.root()
+        operation = {'phase': 'activation_started', 'operation': 'b' * 32}
+        with mock.patch.object(update.Transaction, 'load', return_value=operation), \
+                mock.patch.object(update, 'verify_plugin_agent_bundle', side_effect=update.UpdateError('bad signature')), \
+                mock.patch.object(update, 'run_command') as run:
+            with self.assertRaisesRegex(update.UpdateError, 'bad signature'):
+                update.activate_native(root, '/outside/trust-root.pem')
+        run.assert_not_called()
+
+    def test_image_preload_failure_prevents_agent_and_backend_start(self):
+        root = self.root()
+        operation = {'phase': 'activation_started', 'operation': 'b' * 32}
+        with mock.patch.object(update.Transaction, 'load', return_value=operation), \
+                mock.patch.object(update, 'verify_plugin_agent_bundle', return_value=self.ha_catalog()), \
+                mock.patch.object(update, 'preload_homeassistant_image', side_effect=update.UpdateError('digest mismatch')), \
+                mock.patch.object(update, 'run_command') as run:
+            with self.assertRaisesRegex(update.UpdateError, 'digest mismatch'):
+                update.activate_native(root, '/outside/trust-root.pem')
+        run.assert_not_called()
+
+    def test_tampered_archive_rejected_by_docker_load_before_activation(self):
+        root = self.root()
+        archive = root / 'plugins/homeassistant-image.tar'
+        archive.parent.mkdir(parents=True)
+        archive.write_bytes(b'tampered archive')
+        with mock.patch.object(update, 'run_command', side_effect=[b'linux/arm64', update.UpdateError('invalid archive')]) as run:
+            with self.assertRaisesRegex(update.UpdateError, 'invalid archive'):
+                update.preload_homeassistant_image(root, self.ha_catalog())
+        self.assertEqual(run.call_count, 2)
+
+    def test_activation_preloads_image_before_prepare_agent_and_compose(self):
+        root = self.root()
+        archive = root / 'plugins/homeassistant-image.tar'
+        archive.parent.mkdir(parents=True)
+        archive.write_bytes(b'image archive fixture')
+        operation = {'phase': 'activation_started', 'operation': 'b' * 32}
+        image_id = 'sha256:' + 'a' * 64
+        calls = []
+
+        def fake(args, cwd, **kw):
+            calls.append(args)
+            if args[:3] == ['docker', 'info', '--format']:
+                return b'linux/arm64'
+            if args[:3] == ['docker', 'image', 'inspect']:
+                return (image_id + ' linux/arm64').encode()
+            return b''
+
+        with mock.patch.object(update.Transaction, 'load', return_value=operation), \
+                mock.patch.object(update, 'verify_plugin_agent_bundle', return_value=self.ha_catalog(image_id)), \
+                mock.patch.object(update, 'run_command', side_effect=fake), \
+                mock.patch.object(update, 'restart_services_with_replaced_mounts', return_value=[]):
+            update.activate_native(root, '/outside/trust-root.pem')
+        image_load = next(i for i, args in enumerate(calls) if args[:3] == ['docker', 'load', '-i'])
+        image_inspect = next(i for i, args in enumerate(calls) if args[:3] == ['docker', 'image', 'inspect'])
+        prepare = next(i for i, args in enumerate(calls) if 'prepare.py' in ' '.join(args))
+        agent = next(i for i, args in enumerate(calls) if 'agent_host.py' in ' '.join(args))
+        compose = next(i for i, args in enumerate(calls) if args[:3] == ['docker', 'compose', 'up'])
+        self.assertLess(image_load, image_inspect)
+        self.assertLess(image_inspect, prepare)
+        self.assertLess(prepare, agent)
+        self.assertLess(agent, compose)
 
 class ReplacedMounts(unittest.TestCase):
     def run_case(self, file_offset):

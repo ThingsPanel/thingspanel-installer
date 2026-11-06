@@ -715,11 +715,13 @@ class Transaction:
             for relative, entry in data.get('activation_files', {}).items():
                 if not entry['applied'] or not same(file_info(safe_target(self.root, relative)), entry['new']):
                     raise UpdateError('Activation configuration is not in its recorded state; manual review is required: ' + relative)
-            verify_plugin_agent_bundle(self.root, plugin_trust_root)
+            catalog = verify_plugin_agent_bundle(self.root, plugin_trust_root)
+            if catalog:
+                preload_homeassistant_image(self.root, catalog)
             context = {'TP_INSTALLER_ACTIVE_OPERATION': data['operation']}
             prepare = [sys.executable, str(self.root / 'config/native/prepare.py')]
             run_command(prepare + ['--bootstrap', '--refresh-devices'], self.root, extra_env=context)
-            start_plugin_agent(self.root, plugin_trust_root)
+            start_plugin_agent(self.root, plugin_trust_root, verified_catalog=catalog)
             run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], self.root)
             restart_services_with_replaced_mounts(self.root)
             run_command(prepare + ['--verify'], self.root, extra_env=context)
@@ -805,7 +807,9 @@ def activate_native(root, plugin_trust_root=None):
     current = Transaction(root).load()
     if current is None or current['phase'] != 'activation_started':
         raise UpdateError('Native activation requires its persistent operation')
-    verify_plugin_agent_bundle(root, plugin_trust_root)
+    catalog = verify_plugin_agent_bundle(root, plugin_trust_root)
+    if catalog:
+        preload_homeassistant_image(root, catalog)
     context = {'TP_INSTALLER_ACTIVE_OPERATION': current['operation']}
 
     def native(*args):
@@ -843,10 +847,73 @@ def activate_native(root, plugin_trust_root=None):
         native('--pull')
     print('Applying the existing native migration and service preparation.', flush=True)
     native('--bootstrap', '--refresh-devices')
-    start_plugin_agent(root, plugin_trust_root)
+    start_plugin_agent(root, plugin_trust_root, verified_catalog=catalog)
     run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], root)
     restart_services_with_replaced_mounts(root)
     native('--verify')
+
+
+def load_verified_plugin_catalog(root, trust_root):
+    """Load the exact signed catalog through the same verifier used by the Agent."""
+    path = Path(root) / 'tools/plugin_catalog.py'
+    spec = importlib.util.spec_from_file_location('tp_installer_plugin_catalog', path)
+    if spec is None or spec.loader is None:
+        raise UpdateError('Plugin catalog verifier is unavailable; backend was not started')
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    try:
+        return module.load_verified(Path(root) / 'plugins/plugin-catalog.json', trust_root)
+    except Exception as error:  # noqa: BLE001 - fail closed at the installer boundary
+        raise UpdateError('Plugin catalog signature or contents are invalid; backend was not started') from error
+
+
+def normalize_platform(value):
+    """Normalize Docker and Go architecture names to catalog platform names."""
+    parts = value.strip().lower().split('/')
+    if len(parts) != 2:
+        return ''
+    aliases = {'aarch64': 'arm64', 'x86_64': 'amd64'}
+    parts[1] = aliases.get(parts[1], parts[1])
+    return '/'.join(parts)
+
+
+def preload_homeassistant_image(root, catalog):
+    """Load and verify the signed HA image before the Agent or backend can start."""
+    entries = [entry for entry in catalog.get('plugins', []) if entry.get('id') == 'homeassistant']
+    if not entries:
+        return False
+    if len(entries) != 1:
+        raise UpdateError('Home Assistant catalog entry is ambiguous; backend was not started')
+    entry = entries[0]
+    image_id = entry.get('image_id', '')
+    target = normalize_platform(entry.get('image_platform', ''))
+    if not image_id.startswith('sha256:') or len(image_id) != 71 or not target.startswith('linux/'):
+        raise UpdateError('Home Assistant catalog image identity or target platform is invalid; backend was not started')
+
+    archive = Path(root) / 'plugins/homeassistant-image.tar'
+    if not archive.is_file() or archive.is_symlink():
+        raise UpdateError('Home Assistant image archive is missing or invalid; backend was not started')
+
+    try:
+        docker_platform = run_command(
+            ['docker', 'info', '--format', '{{.OSType}}/{{.Architecture}}'], root
+        ).decode().strip()
+    except (UpdateError, OSError):
+        raise UpdateError('Unable to determine Docker target platform; backend was not started') from None
+    if normalize_platform(docker_platform) != target:
+        raise UpdateError('Home Assistant image target platform does not match Docker; backend was not started')
+
+    run_command(['docker', 'load', '-i', str(archive)], root)
+    try:
+        inspected = run_command(
+            ['docker', 'image', 'inspect', '--format', '{{.Id}} {{.Os}}/{{.Architecture}}', image_id], root
+        ).decode().strip().split()
+    except (UpdateError, OSError):
+        raise UpdateError('Loaded Home Assistant image is unavailable; backend was not started') from None
+    if len(inspected) != 2 or inspected[0] != image_id or normalize_platform(inspected[1]) != target:
+        raise UpdateError('Loaded Home Assistant image digest or platform does not match the signed catalog; backend was not started')
+    return True
 
 
 def verify_plugin_agent_bundle(root, plugin_trust_root=None):
@@ -875,18 +942,17 @@ def verify_plugin_agent_bundle(root, plugin_trust_root=None):
         pass
     else:
         raise UpdateError('Plugin trust root must be outside the installer payload')
-    run_command([
-        sys.executable, str(root / 'tools/plugin_catalog.py'), 'verify',
-        '--trust-root', str(trust_root), '--catalog', str(catalog),
-    ], root)
-    return True
+    return load_verified_plugin_catalog(root, trust_root)
 
 
-def start_plugin_agent(root, plugin_trust_root=None):
+def start_plugin_agent(root, plugin_trust_root=None, verified_catalog=None):
     """Start the already-verified plugin Agent after DB/network bootstrap but before the backend."""
     root = Path(root).resolve()
-    if not verify_plugin_agent_bundle(root, plugin_trust_root):
+    catalog_data = verified_catalog if verified_catalog is not None else verify_plugin_agent_bundle(root, plugin_trust_root)
+    if not catalog_data:
         return False
+    if verified_catalog is None:
+        preload_homeassistant_image(root, catalog_data)
     agent_bin = root / 'bin/tp-agent'
     catalog = root / 'plugins/plugin-catalog.json'
     trust_root = Path(plugin_trust_root).resolve()

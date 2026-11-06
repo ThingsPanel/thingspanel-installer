@@ -71,7 +71,7 @@ jobs:
           test -z "$(git -C ha-connector status --porcelain)"
           python3 -c 'import pathlib,sys; s=pathlib.Path("ha-connector/go.mod").read_text(); assert "replace github.com/thingspanel/device-connector-sdk-go" not in s; assert ("github.com/thingspanel/device-connector-sdk-go " + sys.argv[1]) in s' "$SDK_TAG"
           mkdir -p out
-          (cd agent && GOOS=linux GOARCH="$ARCH" CGO_ENABLED=0 go build -trimpath -o "../out/tp-agent-linux-$ARCH" ./cmd/tp-agent)
+          (cd agent && GOOS=linux GOARCH="$ARCH" CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "../out/tp-agent-linux-$ARCH" ./cmd/tp-agent)
           docker buildx build --platform "linux/$ARCH" --provenance=false --load --tag "thingspanel/homeassistant-connector:$VERSION-$ARCH" ha-connector
           docker image inspect "thingspanel/homeassistant-connector:$VERSION-$ARCH" > "$RUNNER_TEMP/image.json"
           python3 -c 'import json,os,pathlib; i=json.loads(pathlib.Path(os.environ["RUNNER_TEMP"],"image.json").read_text())[0]; assert i["Os"]=="linux" and i["Architecture"]==os.environ["ARCH"]; assert not (i.get("Config",{}).get("Labels") or i.get("Config",{}).get("Volumes") or i.get("Config",{}).get("OnBuild")); pathlib.Path(os.environ["RUNNER_TEMP"],"image-id").write_text(i["Id"])'
@@ -82,6 +82,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           CONNECTOR_COMMIT: ${{ inputs.connector_commit }}
           SDK_COMMIT: ${{ inputs.sdk_commit }}
+          INSTALLER_COMMIT: ${{ github.sha }}
           SIGNING_KEY: ${{ secrets.TP_PLUGIN_CATALOG_SIGNING_KEY }}
         run: |
           set -euo pipefail
@@ -93,7 +94,7 @@ jobs:
           export IMAGE_ID="$(cat "$RUNNER_TEMP/image-id")"
           export IMAGE_SHA="$(sha256sum "out/ha-image-linux-$ARCH.tar" | cut -d' ' -f1)"
           export AGENT_SHA="$(sha256sum "out/tp-agent-linux-$ARCH" | cut -d' ' -f1)"
-          python3 -c 'import json,os,pathlib; e=json.loads(pathlib.Path("plugins/homeassistant.json").read_text()); e.update(version=os.environ["VERSION"], image_id=os.environ["IMAGE_ID"], image_platform="linux/"+os.environ["ARCH"], image_archive_sha256=os.environ["IMAGE_SHA"], source_commit=os.environ["CONNECTOR_COMMIT"], sdk_commit=os.environ["SDK_COMMIT"]); pathlib.Path(os.environ["RUNNER_TEMP"],"homeassistant.json").write_text(json.dumps(e,sort_keys=True,indent=2)+"\n")'
+          python3 -c 'import json,os,pathlib; e=json.loads(pathlib.Path("plugins/homeassistant.json").read_text()); e.update(version=os.environ["VERSION"], image_id=os.environ["IMAGE_ID"], image_platform="linux/"+os.environ["ARCH"], image_archive_sha256=os.environ["IMAGE_SHA"], source_commit=os.environ["CONNECTOR_COMMIT"], sdk_commit=os.environ["SDK_COMMIT"], installer_commit=os.environ["INSTALLER_COMMIT"]); pathlib.Path(os.environ["RUNNER_TEMP"],"homeassistant.json").write_text(json.dumps(e,sort_keys=True,indent=2)+"\n")'
           python3 tools/plugin_catalog.py publish --key "$key" --out "$RUNNER_TEMP/catalog" --version "$VERSION" --valid-days 3650 --plugin-file "$RUNNER_TEMP/homeassistant.json" --target-platform "linux/$ARCH" --release-tag "plugin-ha-v$VERSION" --agent-sha256 "$AGENT_SHA"
           python3 tools/plugin_catalog.py verify --trust-root config/native/plugin_catalog_trust.pem --catalog "$RUNNER_TEMP/catalog/plugin-catalog.json"
           cp "$RUNNER_TEMP/catalog/plugin-catalog.json" "out/catalog-linux-$ARCH.json"

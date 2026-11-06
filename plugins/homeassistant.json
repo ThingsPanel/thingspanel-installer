@@ -18,19 +18,6 @@
   "TP_MQTT_USER": "TP_PROTOCOL_MQTT_USER",
   "TP_MQTT_PASS": "TP_PROTOCOL_MQTT_PASSWORD"
  },
- "env_user": {
-  "HA_BASE_URL": {
-   "required": true,
-   "secret": false,
-   "description": "Home Assistant base URL, e.g. http://homeassistant.local:8123",
-   "validate": "url"
-  },
-  "HA_ACCESS_TOKEN": {
-   "required": true,
-   "secret": true,
-   "description": "Home Assistant long-lived access token"
-  }
- },
  "health": {
   "port": 9001,
   "path": "/health"

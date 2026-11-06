@@ -76,6 +76,7 @@ func (s *Service) Handler() http.Handler {
 		"/v1/prepare":           s.prepare,
 		"/v1/grant":             s.grant,
 		"/v1/activate":          s.activate,
+		"/v1/renew":             s.renew,
 		"/v1/revoke":            s.revoke,
 		"/v1/retire":            s.retire,
 		"/v1/status":            s.status,
@@ -178,6 +179,11 @@ func (s *Service) prepare(ctx context.Context, r apiRequest) (apiResponse, error
 
 func (s *Service) grant(ctx context.Context, r apiRequest) (apiResponse, error) {
 	record, err := s.activator.Grant(ctx, r.Instance, r.Generation, r.RequestKey, r.GrantID, time.Duration(r.TTLSeconds)*time.Second)
+	return apiResponse{Activation: &record}, err
+}
+
+func (s *Service) renew(_ context.Context, r apiRequest) (apiResponse, error) {
+	record, err := s.activator.Renew(r.Instance, r.Generation, r.RequestKey, r.GrantID, time.Duration(r.TTLSeconds)*time.Second)
 	return apiResponse{Activation: &record}, err
 }
 

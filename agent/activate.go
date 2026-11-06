@@ -254,6 +254,40 @@ func (a *Activator) Grant(ctx context.Context, instance string, generation uint6
 	return out, err
 }
 
+// Renew extends the lease of the accepted generation that is already running. It never starts, stops or re-grants:
+// a revoked, stale, unstarted or unknown generation, or a different request key, is refused. (Grant is for the
+// first start; after the start it correctly answers "unresolved".)
+func (a *Activator) Renew(instance string, generation uint64, key, grantID string, ttl time.Duration) (ActivationRecord, error) {
+	var out ActivationRecord
+	if !valid(instance) || !valid(key) || !valid(grantID) || ttl <= 0 || ttl > maxGrantTTL {
+		return out, ErrPreparationPolicy
+	}
+	err := withLock(a.path, func() error {
+		if err := a.accepted(instance, generation); err != nil {
+			return err
+		}
+		disk, err := a.loadLocked()
+		if err != nil {
+			return err
+		}
+		record := disk.Instances[instance]
+		switch {
+		case record == nil || record.Generation != generation || record.RequestKey != key:
+			return ErrNotGranted
+		case record.Revoked:
+			return ErrRevoked
+		case !record.Started || record.StopIntent:
+			return ErrNotGranted
+		case record.LeaseExpires == 0 || a.now().Unix() >= record.LeaseExpires:
+			return ErrLeaseExpired
+		}
+		record.GrantID, record.LeaseExpires = grantID, a.now().Add(ttl).Unix()
+		out = *record
+		return a.saveLocked(disk)
+	})
+	return out, err
+}
+
 // Activate starts the prepared container if, and only if, the grant is still valid.
 func (a *Activator) Activate(ctx context.Context, instance string, generation uint64, key string) (ActivationRecord, error) {
 	var out ActivationRecord

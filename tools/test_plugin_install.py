@@ -20,39 +20,52 @@ def entry(name):
     return json.loads((PLUGINS / (name + '.json')).read_text())
 
 
+def generic_user_entry():
+    """Test generic installer fields without making HA credentials install-time inputs."""
+    value = entry('homeassistant')
+    value['env_user'] = {
+        'TEST_BASE_URL': {'required': True, 'secret': False, 'validate': 'url'},
+        'TEST_ACCESS_TOKEN': {'required': True, 'secret': True},
+    }
+    return value
+
+
 class UserEnv(unittest.TestCase):
     def test_set_and_secret_from_environment(self):
-        with mock.patch.dict(os.environ, {'HA_ACCESS_TOKEN': 'tok-123'}):
-            got = pi.collect_user_env(entry('homeassistant'), ['HA_BASE_URL=http://ha.local:8123'], False)
-        self.assertEqual(got, {'HA_BASE_URL': 'http://ha.local:8123', 'HA_ACCESS_TOKEN': 'tok-123'})
+        with mock.patch.dict(os.environ, {'TEST_ACCESS_TOKEN': 'tok-123'}):
+            got = pi.collect_user_env(generic_user_entry(), ['TEST_BASE_URL=http://ha.local:8123'], False)
+        self.assertEqual(got, {'TEST_BASE_URL': 'http://ha.local:8123', 'TEST_ACCESS_TOKEN': 'tok-123'})
 
     def test_secret_refused_on_command_line(self):
         with self.assertRaisesRegex(RuntimeError, 'secret'):
-            pi.collect_user_env(entry('homeassistant'), ['HA_ACCESS_TOKEN=x'], False)
+            pi.collect_user_env(generic_user_entry(), ['TEST_ACCESS_TOKEN=x'], False)
 
     def test_missing_required_noninteractive_fails_without_echoing_values(self):
         with mock.patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(RuntimeError, 'HA_BASE_URL is required'):
-                pi.collect_user_env(entry('homeassistant'), [], False)
+            with self.assertRaisesRegex(RuntimeError, 'TEST_BASE_URL is required'):
+                pi.collect_user_env(generic_user_entry(), [], False)
 
     def test_url_validation(self):
-        with mock.patch.dict(os.environ, {'HA_ACCESS_TOKEN': 'x'}):
+        with mock.patch.dict(os.environ, {'TEST_ACCESS_TOKEN': 'x'}):
             with self.assertRaisesRegex(RuntimeError, 'http'):
-                pi.collect_user_env(entry('homeassistant'), ['HA_BASE_URL=ftp://nope'], False)
+                pi.collect_user_env(generic_user_entry(), ['TEST_BASE_URL=ftp://nope'], False)
 
     def test_newline_rejected(self):
-        with mock.patch.dict(os.environ, {'HA_ACCESS_TOKEN': 'a\nB=c'}):
+        with mock.patch.dict(os.environ, {'TEST_ACCESS_TOKEN': 'a\nB=c'}):
             with self.assertRaisesRegex(RuntimeError, 'single line'):
-                pi.collect_user_env(entry('homeassistant'), ['HA_BASE_URL=http://h'], False)
+                pi.collect_user_env(generic_user_entry(), ['TEST_BASE_URL=http://h'], False)
 
     def test_prompt_hides_secret(self):
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch('builtins.input', return_value='http://h:1') as inp, \
                 mock.patch('getpass.getpass', return_value='sekret') as gp:
-            got = pi.collect_user_env(entry('homeassistant'), [], True)
-        self.assertEqual(got['HA_ACCESS_TOKEN'], 'sekret')
+            got = pi.collect_user_env(generic_user_entry(), [], True)
+        self.assertEqual(got['TEST_ACCESS_TOKEN'], 'sekret')
         inp.assert_called_once()
         gp.assert_called_once()
         self.assertNotIn('sekret', gp.call_args[0][0])
+
+    def test_homeassistant_install_has_no_ha_credentials(self):
+        self.assertEqual(entry('homeassistant').get('env_user', {}), {})
 
 
 class Identity(unittest.TestCase):

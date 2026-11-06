@@ -206,9 +206,6 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/release-manifest.json
-            dist/release-manifest.json.sig
           fail_on_unmatched_files: false
           tag_name: ${{ needs.prepare.outputs.version }}
           name: "ThingsPanel All-in-One ${{ needs.prepare.outputs.version }}"
@@ -234,6 +231,8 @@ jobs:
           draft: false
           prerelease: ${{ contains(needs.prepare.outputs.version, 'rc') || contains(needs.prepare.outputs.version, 'beta') }}
           files: |
+            dist/release-manifest.json
+            dist/release-manifest.json.sig
             dist/windows/*.exe
             dist/macos/*.pkg
             dist/SHA256SUMS.txt

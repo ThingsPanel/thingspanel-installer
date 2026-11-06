@@ -718,6 +718,7 @@ class Transaction:
             context = {'TP_INSTALLER_ACTIVE_OPERATION': data['operation']}
             prepare = [sys.executable, str(self.root / 'config/native/prepare.py')]
             run_command(prepare + ['--bootstrap', '--refresh-devices'], self.root, extra_env=context)
+            start_plugin_agent(self.root)
             run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], self.root)
             restart_services_with_replaced_mounts(self.root)
             run_command(prepare + ['--verify'], self.root, extra_env=context)
@@ -840,9 +841,40 @@ def activate_native(root):
         native('--pull')
     print('Applying the existing native migration and service preparation.', flush=True)
     native('--bootstrap', '--refresh-devices')
+    start_plugin_agent(root)
     run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], root)
     restart_services_with_replaced_mounts(root)
     native('--verify')
+
+
+def start_plugin_agent(root):
+    """Start the signed plugin Agent after DB/network bootstrap but before the backend.
+
+    Older installer payloads have no Agent bundle and retain their existing startup flow. A partial bundle is a
+    release packaging error and fails closed instead of bringing up a backend that appears plugin-ready but cannot
+    verify or run the catalog.
+    """
+    root = Path(root).resolve()
+    agent_bin = root / 'bin/tp-agent'
+    catalog = root / 'plugins/plugin-catalog.json'
+    signature = root / 'plugins/plugin-catalog.json.sig'
+    trust_root = root / 'config/native/plugin-trust-root.pem'
+    bundle = (agent_bin, catalog, signature, trust_root)
+    present = tuple(path.is_file() for path in bundle)
+    if not any(present):
+        return False
+    if not all(present):
+        raise UpdateError('Plugin Agent release bundle is incomplete; backend was not started')
+    run_command([
+        sys.executable, str(root / 'tools/plugin_catalog.py'), 'verify',
+        '--trust-root', str(trust_root), '--catalog', str(catalog),
+    ], root)
+    run_command([
+        sys.executable, str(root / 'tools/agent_host.py'), 'up',
+        '--stack-dir', str(root), '--agent-dir', str(root / '.tp-agent'),
+        '--agent-bin', str(agent_bin), '--catalog', str(catalog), '--trust-root', str(trust_root),
+    ], root)
+    return True
 
 
 def main():

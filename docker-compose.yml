@@ -144,6 +144,8 @@ services:
     - GOTP_AUTOMATION_DEPLOYMENT_ID=${TP_DEPLOYMENT_ID:-community}
     - TP_THINGMODEL_NATIVE_URL=http://encore-api:14000
     - GOTP_JWT_KEY=${TP_JWT_KEY:?set in .env}
+    - TP_AGENT_SOCKET=/run/tp-agent/agent.sock
+    - TP_AGENT_TOKEN_FILE=/run/tp-agent/token
     depends_on:
       postgres:
         condition: service_healthy
@@ -154,6 +156,7 @@ services:
     volumes:
     - go_files:/go/src/app/files
     - go_configs:/go/src/app/configs
+    - ./.tp-agent/run:/run/tp-agent:ro
     restart: unless-stopped
     networks:
     - thingspanel_network

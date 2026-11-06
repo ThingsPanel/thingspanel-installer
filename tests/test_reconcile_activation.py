@@ -55,6 +55,26 @@ class ReconcileActivation(unittest.TestCase):
         self.assertEqual(saved, [])
         self.assertEqual(data['phase'], 'activation_started')
 
+    def test_reconciliation_starts_agent_before_backend_compose(self):
+        tx, _, _ = self.transaction()
+        for relative in ('bin/tp-agent', 'plugins/plugin-catalog.json', 'plugins/plugin-catalog.json.sig',
+                         'config/native/plugin-trust-root.pem'):
+            path = tx.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'test fixture')
+        calls = []
+
+        def fake(args, cwd, **kw):
+            calls.append(args)
+            return b''
+
+        with mock.patch.object(update, 'run_command', side_effect=fake), \
+                mock.patch.object(update, 'restart_services_with_replaced_mounts', return_value=[]):
+            tx.reconcile_activation()
+        agent_index = next(i for i, args in enumerate(calls) if 'agent_host.py' in ' '.join(args))
+        compose_index = next(i for i, args in enumerate(calls) if args[:3] == ['docker', 'compose', 'up'])
+        self.assertLess(agent_index, compose_index)
+
     def test_refuses_without_unresolved_activation(self):
         for phase in ('complete', 'recovered', 'config_committed'):
             tx, data, saved = self.transaction(phase)
@@ -64,6 +84,66 @@ class ReconcileActivation(unittest.TestCase):
             run.assert_not_called()
             self.assertEqual(saved, [])
 
+
+class PluginAgentActivation(unittest.TestCase):
+    def root(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(root, ignore_errors=True))
+        return root
+
+    def add_bundle(self, root):
+        for relative in ('bin/tp-agent', 'plugins/plugin-catalog.json', 'plugins/plugin-catalog.json.sig',
+                         'config/native/plugin-trust-root.pem'):
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'test fixture')
+
+    def test_old_payload_without_bundle_keeps_existing_startup_flow(self):
+        root = self.root()
+        with mock.patch.object(update, 'run_command') as run:
+            self.assertFalse(update.start_plugin_agent(root))
+        run.assert_not_called()
+
+    def test_partial_bundle_fails_closed(self):
+        root = self.root()
+        (root / 'plugins').mkdir()
+        (root / 'plugins/plugin-catalog.json').write_bytes(b'catalog')
+        with mock.patch.object(update, 'run_command') as run:
+            with self.assertRaisesRegex(update.UpdateError, 'bundle is incomplete'):
+                update.start_plugin_agent(root)
+        run.assert_not_called()
+
+    def test_complete_bundle_starts_agent_with_pinned_files(self):
+        root = self.root()
+        self.add_bundle(root)
+        with mock.patch.object(update, 'run_command') as run:
+            self.assertTrue(update.start_plugin_agent(root))
+        verify_args = run.call_args_list[0].args[0]
+        self.assertIn('plugin_catalog.py', ' '.join(verify_args))
+        self.assertIn('verify', verify_args)
+        args = run.call_args_list[1].args[0]
+        self.assertEqual(args[1:3], [str((root / 'tools/agent_host.py').resolve()), 'up'])
+        self.assertEqual(Path(args[args.index('--agent-bin') + 1]), (root / 'bin/tp-agent').resolve())
+        self.assertEqual(Path(args[args.index('--catalog') + 1]), (root / 'plugins/plugin-catalog.json').resolve())
+        self.assertEqual(Path(args[args.index('--trust-root') + 1]), (root / 'config/native/plugin-trust-root.pem').resolve())
+
+    def test_activation_starts_agent_before_backend_compose(self):
+        root = self.root()
+        self.add_bundle(root)
+        calls = []
+
+        def fake(args, cwd, **kw):
+            calls.append(args)
+            return b''
+
+        operation = {'phase': 'activation_started', 'operation': 'b' * 32}
+        with mock.patch.object(update.Transaction, 'load', return_value=operation), \
+                mock.patch.object(update, 'run_command', side_effect=fake), \
+                mock.patch.object(update, 'restart_services_with_replaced_mounts', return_value=[]):
+            update.activate_native(root)
+        agent_index = next(i for i, args in enumerate(calls) if 'agent_host.py' in ' '.join(args))
+        compose_index = next(i for i, args in enumerate(calls) if args[:3] == ['docker', 'compose', 'up'])
+        self.assertLess(agent_index, compose_index)
 
 class ReplacedMounts(unittest.TestCase):
     def run_case(self, file_offset):

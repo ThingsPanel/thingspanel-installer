@@ -23,6 +23,7 @@
   `TP_REQUIRE_SIGNED_RELEASE=1`（没有可用信任根则失败）、`TP_REVOKED_VERSIONS`（逗号分隔）。
   `install.bash`、`upgrade.sh`、`install.core.ps1`、`upgrade.ps1` 均已传递。
 - 插件 catalog 有独立信任锚：`TP_PLUGIN_TRUST_ROOT` 传给 `update.py --plugin-trust-root`，必须是安装目录外的绝对公钥路径；安装器先验 catalog，再在启动后端前启动 Agent。插件包不能自带并替换这个根。当前仓库没有正式插件信任根或正式签名 catalog。
+- 当前 `plugins/homeassistant.json` 已对齐候选 `1.0.0-candidate.20261106-4d8d45b`：`linux/arm64`、镜像 ID `sha256:be2578ecf78a37d4477f43a63685cbf1d137370f2f7de54ff11a726dd88d165e`。该条目不是可安装签名目录；候选镜像包在工作目录外，尚缺正式 catalog 签名和匹配的包外官方公钥。不得用历史 `t7c` 镜像或测试密钥发布。
 - **默认行为不变**：没有配置信任根且未要求签名时，仍只靠入口对 `update.py` 的摘要固定，并向 stderr 打印警告。
   在发布负责人提供正式信任根并启用 `TP_REQUIRE_SIGNED_RELEASE` 之前，这不是签名信任链。
 - 撤回列表目前来自 manifest 自带的 `revoked_versions`（已签名）和 `--revoked-version`；独立的撤回源尚未设计。

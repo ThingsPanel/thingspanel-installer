@@ -1,9 +1,9 @@
 {
   "id": "homeassistant",
-  "version": "1.0.0-candidate.20261106-4d8d45b",
+  "version": "1.0.0-candidate.20261106-4d8d45b-r2",
   "kind": "service",
   "description": "Home Assistant device connector: HA state_changed events become ThingsPanel telemetry, platform commands call HA services.",
-  "image_id": "sha256:be2578ecf78a37d4477f43a63685cbf1d137370f2f7de54ff11a726dd88d165e",
+  "image_id": "sha256:0747be19506d38d110a61519964c0f5b6617886d5eb475b303a17ff1c8e6a21c",
   "image_platform": "linux/arm64",
   "entrypoint": "/usr/local/bin/homeassistant-service",
   "args": [],

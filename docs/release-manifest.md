@@ -22,6 +22,7 @@
 - 入口脚本从环境变量传入：`TP_RELEASE_TRUST_ROOT`（公钥路径，必须带外提供，不能来自 payload）、
   `TP_REQUIRE_SIGNED_RELEASE=1`（没有可用信任根则失败）、`TP_REVOKED_VERSIONS`（逗号分隔）。
   `install.bash`、`upgrade.sh`、`install.core.ps1`、`upgrade.ps1` 均已传递。
+- 插件 catalog 有独立信任锚：`TP_PLUGIN_TRUST_ROOT` 传给 `update.py --plugin-trust-root`，必须是安装目录外的绝对公钥路径；安装器先验 catalog，再在启动后端前启动 Agent。插件包不能自带并替换这个根。当前仓库没有正式插件信任根或正式签名 catalog。
 - **默认行为不变**：没有配置信任根且未要求签名时，仍只靠入口对 `update.py` 的摘要固定，并向 stderr 打印警告。
   在发布负责人提供正式信任根并启用 `TP_REQUIRE_SIGNED_RELEASE` 之前，这不是签名信任链。
 - 撤回列表目前来自 manifest 自带的 `revoked_versions`（已签名）和 `--revoked-version`；独立的撤回源尚未设计。

@@ -701,7 +701,7 @@ class Transaction:
         entry['applied'] = True
         self.save(data)
 
-    def reconcile_activation(self):
+    def reconcile_activation(self, plugin_trust_root=None):
         """Resume an unresolved activation only by re-running its idempotent tail
         (migration bootstrap, compose up, verification).
 
@@ -715,10 +715,11 @@ class Transaction:
             for relative, entry in data.get('activation_files', {}).items():
                 if not entry['applied'] or not same(file_info(safe_target(self.root, relative)), entry['new']):
                     raise UpdateError('Activation configuration is not in its recorded state; manual review is required: ' + relative)
+            verify_plugin_agent_bundle(self.root, plugin_trust_root)
             context = {'TP_INSTALLER_ACTIVE_OPERATION': data['operation']}
             prepare = [sys.executable, str(self.root / 'config/native/prepare.py')]
             run_command(prepare + ['--bootstrap', '--refresh-devices'], self.root, extra_env=context)
-            start_plugin_agent(self.root)
+            start_plugin_agent(self.root, plugin_trust_root)
             run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], self.root)
             restart_services_with_replaced_mounts(self.root)
             run_command(prepare + ['--verify'], self.root, extra_env=context)
@@ -798,12 +799,13 @@ def restart_services_with_replaced_mounts(root):
     return stale
 
 
-def activate_native(root):
+def activate_native(root, plugin_trust_root=None):
     """Existing native entry point, after commit, under the same process lock."""
     prepare = [sys.executable, str(root / 'config/native/prepare.py')]
     current = Transaction(root).load()
     if current is None or current['phase'] != 'activation_started':
         raise UpdateError('Native activation requires its persistent operation')
+    verify_plugin_agent_bundle(root, plugin_trust_root)
     context = {'TP_INSTALLER_ACTIVE_OPERATION': current['operation']}
 
     def native(*args):
@@ -841,34 +843,53 @@ def activate_native(root):
         native('--pull')
     print('Applying the existing native migration and service preparation.', flush=True)
     native('--bootstrap', '--refresh-devices')
-    start_plugin_agent(root)
+    start_plugin_agent(root, plugin_trust_root)
     run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], root)
     restart_services_with_replaced_mounts(root)
     native('--verify')
 
 
-def start_plugin_agent(root):
-    """Start the signed plugin Agent after DB/network bootstrap but before the backend.
-
-    Older installer payloads have no Agent bundle and retain their existing startup flow. A partial bundle is a
-    release packaging error and fails closed instead of bringing up a backend that appears plugin-ready but cannot
-    verify or run the catalog.
-    """
+def verify_plugin_agent_bundle(root, plugin_trust_root=None):
+    """Verify an optional plugin Agent bundle before any migration or service startup."""
     root = Path(root).resolve()
     agent_bin = root / 'bin/tp-agent'
     catalog = root / 'plugins/plugin-catalog.json'
     signature = root / 'plugins/plugin-catalog.json.sig'
-    trust_root = root / 'config/native/plugin-trust-root.pem'
-    bundle = (agent_bin, catalog, signature, trust_root)
+    bundle = (agent_bin, catalog, signature)
     present = tuple(path.is_file() for path in bundle)
     if not any(present):
         return False
     if not all(present):
         raise UpdateError('Plugin Agent release bundle is incomplete; backend was not started')
+    if not plugin_trust_root:
+        raise UpdateError('Plugin trust root was not supplied out of band; backend was not started')
+    trust_root = Path(plugin_trust_root)
+    if not trust_root.is_absolute():
+        raise UpdateError('Plugin trust root path must be absolute and supplied out of band')
+    trust_root = trust_root.resolve()
+    if not trust_root.is_file():
+        raise UpdateError('Plugin trust root is unavailable; backend was not started')
+    try:
+        trust_root.relative_to(root)
+    except ValueError:
+        pass
+    else:
+        raise UpdateError('Plugin trust root must be outside the installer payload')
     run_command([
         sys.executable, str(root / 'tools/plugin_catalog.py'), 'verify',
         '--trust-root', str(trust_root), '--catalog', str(catalog),
     ], root)
+    return True
+
+
+def start_plugin_agent(root, plugin_trust_root=None):
+    """Start the already-verified plugin Agent after DB/network bootstrap but before the backend."""
+    root = Path(root).resolve()
+    if not verify_plugin_agent_bundle(root, plugin_trust_root):
+        return False
+    agent_bin = root / 'bin/tp-agent'
+    catalog = root / 'plugins/plugin-catalog.json'
+    trust_root = Path(plugin_trust_root).resolve()
     run_command([
         sys.executable, str(root / 'tools/agent_host.py'), 'up',
         '--stack-dir', str(root), '--agent-dir', str(root / '.tp-agent'),
@@ -885,6 +906,8 @@ def main():
     parser.add_argument('--recover-config-only', action='store_true')
     parser.add_argument('--reconcile-activation', action='store_true',
                         help='re-run compose up and verification for an unresolved activation, then close its journal')
+    parser.add_argument('--plugin-trust-root', default='',
+                        help='absolute out-of-band ECDSA P-256 public key used to verify the plugin catalog')
     parser.add_argument('--release-trust-root', default='', help='pinned ECDSA P-256 public key (PEM) for signed releases')
     parser.add_argument('--require-signed-release', action='store_true',
                         help='fail closed unless the release verifies against --release-trust-root')
@@ -903,11 +926,12 @@ def main():
             print('[WARN] No release trust root configured; the release signature is not verified.', file=sys.stderr)
         transaction = Transaction(args.root, release_policy=policy)
         if args.reconcile_activation:
-            transaction.reconcile_activation()
+            transaction.reconcile_activation(args.plugin_trust_root or None)
             print('Activation reconciled.')
             return 0
         transaction.run(args.base_url, expected_version=args.expected_version,
-                        activate=activate_native, recovery_only=args.recover_config_only)
+                        activate=lambda install_root: activate_native(install_root, args.plugin_trust_root or None),
+                        recovery_only=args.recover_config_only)
         print('Configuration recovery complete.' if args.recover_config_only else 'Installation operation completed.')
     except (UpdateError, OSError) as error:
         # Avoid arbitrary subprocess output or URLs in the error channel.

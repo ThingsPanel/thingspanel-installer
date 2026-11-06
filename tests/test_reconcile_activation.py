@@ -57,11 +57,13 @@ class ReconcileActivation(unittest.TestCase):
 
     def test_reconciliation_starts_agent_before_backend_compose(self):
         tx, _, _ = self.transaction()
-        for relative in ('bin/tp-agent', 'plugins/plugin-catalog.json', 'plugins/plugin-catalog.json.sig',
-                         'config/native/plugin-trust-root.pem'):
+        for relative in ('bin/tp-agent', 'plugins/plugin-catalog.json', 'plugins/plugin-catalog.json.sig'):
             path = tx.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b'test fixture')
+        trust_root = tx.root.parent / (tx.root.name + '-external-trust.pem')
+        trust_root.write_bytes(b'test trust root')
+        self.addCleanup(lambda: trust_root.unlink(missing_ok=True))
         calls = []
 
         def fake(args, cwd, **kw):
@@ -70,7 +72,7 @@ class ReconcileActivation(unittest.TestCase):
 
         with mock.patch.object(update, 'run_command', side_effect=fake), \
                 mock.patch.object(update, 'restart_services_with_replaced_mounts', return_value=[]):
-            tx.reconcile_activation()
+            tx.reconcile_activation(str(trust_root))
         agent_index = next(i for i, args in enumerate(calls) if 'agent_host.py' in ' '.join(args))
         compose_index = next(i for i, args in enumerate(calls) if args[:3] == ['docker', 'compose', 'up'])
         self.assertLess(agent_index, compose_index)
@@ -92,11 +94,16 @@ class PluginAgentActivation(unittest.TestCase):
         return root
 
     def add_bundle(self, root):
-        for relative in ('bin/tp-agent', 'plugins/plugin-catalog.json', 'plugins/plugin-catalog.json.sig',
-                         'config/native/plugin-trust-root.pem'):
+        for relative in ('bin/tp-agent', 'plugins/plugin-catalog.json', 'plugins/plugin-catalog.json.sig'):
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b'test fixture')
+
+    def external_trust_root(self, root):
+        trust_root = root.parent / (root.name + '-external-trust.pem')
+        trust_root.write_bytes(b'test trust root')
+        self.addCleanup(lambda: trust_root.unlink(missing_ok=True))
+        return trust_root
 
     def test_old_payload_without_bundle_keeps_existing_startup_flow(self):
         root = self.root()
@@ -116,20 +123,52 @@ class PluginAgentActivation(unittest.TestCase):
     def test_complete_bundle_starts_agent_with_pinned_files(self):
         root = self.root()
         self.add_bundle(root)
+        trust_root = self.external_trust_root(root)
         with mock.patch.object(update, 'run_command') as run:
-            self.assertTrue(update.start_plugin_agent(root))
+            self.assertTrue(update.start_plugin_agent(root, str(trust_root)))
         verify_args = run.call_args_list[0].args[0]
         self.assertIn('plugin_catalog.py', ' '.join(verify_args))
         self.assertIn('verify', verify_args)
+        self.assertEqual(Path(verify_args[verify_args.index('--trust-root') + 1]), trust_root.resolve())
         args = run.call_args_list[1].args[0]
         self.assertEqual(args[1:3], [str((root / 'tools/agent_host.py').resolve()), 'up'])
         self.assertEqual(Path(args[args.index('--agent-bin') + 1]), (root / 'bin/tp-agent').resolve())
         self.assertEqual(Path(args[args.index('--catalog') + 1]), (root / 'plugins/plugin-catalog.json').resolve())
-        self.assertEqual(Path(args[args.index('--trust-root') + 1]), (root / 'config/native/plugin-trust-root.pem').resolve())
+        self.assertEqual(Path(args[args.index('--trust-root') + 1]), trust_root.resolve())
+
+    def test_complete_bundle_without_external_trust_root_fails_closed(self):
+        root = self.root()
+        self.add_bundle(root)
+        with mock.patch.object(update, 'run_command') as run:
+            with self.assertRaisesRegex(update.UpdateError, 'not supplied out of band'):
+                update.start_plugin_agent(root)
+        run.assert_not_called()
+
+    def test_bad_catalog_signature_does_not_restart_agent(self):
+        root = self.root()
+        self.add_bundle(root)
+        trust_root = self.external_trust_root(root)
+        with mock.patch.object(update, 'run_command', side_effect=update.UpdateError('bad_signature')) as run:
+            with self.assertRaisesRegex(update.UpdateError, 'bad_signature'):
+                update.start_plugin_agent(root, str(trust_root))
+        self.assertEqual(run.call_count, 1)
+        self.assertIn('plugin_catalog.py', ' '.join(run.call_args.args[0]))
+
+    def test_trust_root_inside_installer_payload_is_rejected(self):
+        root = self.root()
+        self.add_bundle(root)
+        trust_root = root / 'keys/plugin-trust-root.pem'
+        trust_root.parent.mkdir(parents=True)
+        trust_root.write_bytes(b'test trust root')
+        with mock.patch.object(update, 'run_command') as run:
+            with self.assertRaisesRegex(update.UpdateError, 'outside the installer payload'):
+                update.start_plugin_agent(root, str(trust_root))
+        run.assert_not_called()
 
     def test_activation_starts_agent_before_backend_compose(self):
         root = self.root()
         self.add_bundle(root)
+        trust_root = self.external_trust_root(root)
         calls = []
 
         def fake(args, cwd, **kw):
@@ -140,7 +179,7 @@ class PluginAgentActivation(unittest.TestCase):
         with mock.patch.object(update.Transaction, 'load', return_value=operation), \
                 mock.patch.object(update, 'run_command', side_effect=fake), \
                 mock.patch.object(update, 'restart_services_with_replaced_mounts', return_value=[]):
-            update.activate_native(root)
+            update.activate_native(root, str(trust_root))
         agent_index = next(i for i, args in enumerate(calls) if 'agent_host.py' in ' '.join(args))
         compose_index = next(i for i, args in enumerate(calls) if args[:3] == ['docker', 'compose', 'up'])
         self.assertLess(agent_index, compose_index)

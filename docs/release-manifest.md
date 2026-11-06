@@ -23,7 +23,7 @@
   `TP_REQUIRE_SIGNED_RELEASE=1`（没有可用信任根则失败）、`TP_REVOKED_VERSIONS`（逗号分隔）。
   `install.bash`、`upgrade.sh`、`install.core.ps1`、`upgrade.ps1` 均已传递。
 - 插件 catalog 有独立信任锚：`TP_PLUGIN_TRUST_ROOT` 传给 `update.py --plugin-trust-root`，必须是安装目录外的绝对公钥路径；安装器先验 catalog，再在启动后端前启动 Agent。插件包不能自带并替换这个根。当前仓库没有正式插件信任根或正式签名 catalog。
-- 当前 `plugins/homeassistant.json` 对齐候选 `1.0.0-candidate.20261106-4d8d45b-r2`：`linux/arm64`、镜像 ID `sha256:0747be19506d38d110a61519964c0f5b6617886d5eb475b303a17ff1c8e6a21c`。r1 因镜像带 OCI 标签被 Agent allowlist 拒绝；r2 从同一干净 HA 提交重建且无镜像标签，已在隔离 Agent/容器中安装并通过健康检查。候选包在工作目录外，正式 catalog 签名和匹配的包外官方公钥仍缺。不得用历史 `t7c` 镜像或测试密钥发布。
+- 当前 `plugins/homeassistant.json` 对齐候选 `1.0.0-candidate.20261106-4d8d45b-r2`：`linux/arm64`、镜像 ID `sha256:0747be19506d38d110a61519964c0f5b6617886d5eb475b303a17ff1c8e6a21c`、归档 SHA-256 `5421f8ec4d62c5fabe4b5abd26312d5f13e9f4fe041fe0977dd932265e6bf220`。预加载会先流式核对 `image_archive_sha256`，匹配后才执行 `docker load`，随后仍检查镜像 ID/平台。r1 因镜像带 OCI 标签被 Agent allowlist 拒绝；r2 从同一干净 HA 提交重建且无镜像标签，已在隔离 Agent/容器中安装并通过健康检查。候选包在工作目录外，正式 catalog 签名和匹配的包外官方公钥仍缺。不得用历史 `t7c` 镜像或测试密钥发布。
 - **默认行为不变**：没有配置信任根且未要求签名时，仍只靠入口对 `update.py` 的摘要固定，并向 stderr 打印警告。
   在发布负责人提供正式信任根并启用 `TP_REQUIRE_SIGNED_RELEASE` 之前，这不是签名信任链。
 - 撤回列表目前来自 manifest 自带的 `revoked_versions`（已签名）和 `--revoked-version`；独立的撤回源尚未设计。

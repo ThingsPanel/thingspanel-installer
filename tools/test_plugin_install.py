@@ -164,6 +164,14 @@ class CatalogChecks(unittest.TestCase):
         for name in ('homeassistant', 'http-adapter'):
             plugin_catalog.check_entry(entry(name))
 
+    def test_homeassistant_archive_digest_must_be_lowercase_sha256(self):
+        for digest in ('', 'a' * 63, 'A' * 64, 'g' * 64):
+            with self.subTest(digest=digest):
+                e = entry('homeassistant')
+                e['image_archive_sha256'] = digest
+                with self.assertRaises(ValueError):
+                    plugin_catalog.check_entry(e)
+
     def test_bad_binding_rejected(self):
         e = entry('homeassistant')
         e['platform']['binding'] = 'bogus'

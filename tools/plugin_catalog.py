@@ -37,6 +37,8 @@ def check_entry(entry):
             raise ValueError('plugin entry is missing ' + key)
     if not str(entry['image_id']).startswith('sha256:') or len(entry['image_id']) != 71:
         raise ValueError('image_id must be an immutable sha256 image ID')
+    if entry['id'] == 'homeassistant' and re.fullmatch(r'[0-9a-f]{64}', str(entry.get('image_archive_sha256', ''))) is None:
+        raise ValueError('homeassistant.image_archive_sha256 must be a lowercase SHA-256 digest')
     platform = entry['platform']
     binding = platform.get('binding', 'template')
     if binding not in ('template', 'none'):

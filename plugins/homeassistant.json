@@ -5,6 +5,7 @@
   "description": "Home Assistant device connector: HA state_changed events become ThingsPanel telemetry, platform commands call HA services.",
   "image_id": "sha256:0747be19506d38d110a61519964c0f5b6617886d5eb475b303a17ff1c8e6a21c",
   "image_platform": "linux/arm64",
+  "image_archive_sha256": "5421f8ec4d62c5fabe4b5abd26312d5f13e9f4fe041fe0977dd932265e6bf220",
   "entrypoint": "/usr/local/bin/homeassistant-service",
   "args": [],
   "env": [

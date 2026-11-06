@@ -888,12 +888,25 @@ def preload_homeassistant_image(root, catalog):
     entry = entries[0]
     image_id = entry.get('image_id', '')
     target = normalize_platform(entry.get('image_platform', ''))
+    archive_sha256 = entry.get('image_archive_sha256', '')
     if not image_id.startswith('sha256:') or len(image_id) != 71 or not target.startswith('linux/'):
         raise UpdateError('Home Assistant catalog image identity or target platform is invalid; backend was not started')
+    if not isinstance(archive_sha256, str) or re.fullmatch(r'[0-9a-f]{64}', archive_sha256) is None:
+        raise UpdateError('Home Assistant catalog image archive digest is invalid; backend was not started')
 
     archive = Path(root) / 'plugins/homeassistant-image.tar'
     if not archive.is_file() or archive.is_symlink():
         raise UpdateError('Home Assistant image archive is missing or invalid; backend was not started')
+
+    try:
+        digest = hashlib.sha256()
+        with archive.open('rb') as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b''):
+                digest.update(block)
+    except OSError:
+        raise UpdateError('Unable to verify Home Assistant image archive; backend was not started') from None
+    if digest.hexdigest() != archive_sha256:
+        raise UpdateError('Home Assistant image archive digest does not match the signed catalog; backend was not started')
 
     try:
         docker_platform = run_command(

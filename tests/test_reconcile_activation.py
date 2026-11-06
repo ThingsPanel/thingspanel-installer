@@ -2,6 +2,7 @@
 
 The journal and Compose/prepare commands are explicit substitutes; this does not start services.
 """
+import hashlib
 import importlib.util
 import json
 import os
@@ -185,7 +186,8 @@ class PluginAgentActivation(unittest.TestCase):
         self.assertLess(agent_index, compose_index)
 
     def ha_catalog(self, image_id='sha256:' + 'a' * 64, platform='linux/arm64'):
-        return {'plugins': [{'id': 'homeassistant', 'image_id': image_id, 'image_platform': platform}]}
+        return {'plugins': [{'id': 'homeassistant', 'image_id': image_id, 'image_platform': platform,
+                            'image_archive_sha256': hashlib.sha256(b'image archive fixture').hexdigest()}]}
 
     def test_ha_image_archive_is_loaded_then_id_and_platform_are_checked(self):
         root = self.root()
@@ -256,15 +258,29 @@ class PluginAgentActivation(unittest.TestCase):
                 update.activate_native(root, '/outside/trust-root.pem')
         run.assert_not_called()
 
-    def test_tampered_archive_rejected_by_docker_load_before_activation(self):
+    def test_tampered_archive_rejected_before_docker_load(self):
         root = self.root()
         archive = root / 'plugins/homeassistant-image.tar'
         archive.parent.mkdir(parents=True)
         archive.write_bytes(b'tampered archive')
-        with mock.patch.object(update, 'run_command', side_effect=[b'linux/arm64', update.UpdateError('invalid archive')]) as run:
-            with self.assertRaisesRegex(update.UpdateError, 'invalid archive'):
+        # Even if the catalog's image is already present, replacing the signed archive
+        # must fail before Docker is queried or asked to load it.
+        with mock.patch.object(update, 'run_command', return_value=b'sha256:' + b'a' * 64 + b' linux/arm64') as run:
+            with self.assertRaisesRegex(update.UpdateError, 'archive digest does not match'):
                 update.preload_homeassistant_image(root, self.ha_catalog())
-        self.assertEqual(run.call_count, 2)
+        run.assert_not_called()
+
+    def test_invalid_archive_digest_format_fails_before_any_docker_command(self):
+        root = self.root()
+        archive = root / 'plugins/homeassistant-image.tar'
+        archive.parent.mkdir(parents=True)
+        archive.write_bytes(b'image archive fixture')
+        catalog = self.ha_catalog()
+        catalog['plugins'][0]['image_archive_sha256'] = 'A' * 64
+        with mock.patch.object(update, 'run_command') as run:
+            with self.assertRaisesRegex(update.UpdateError, 'archive digest is invalid'):
+                update.preload_homeassistant_image(root, catalog)
+        run.assert_not_called()
 
     def test_activation_preloads_image_before_prepare_agent_and_compose(self):
         root = self.root()

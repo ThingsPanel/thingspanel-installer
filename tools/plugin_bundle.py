@@ -6,12 +6,14 @@ archive, executes the Agent, loads a Docker image, or changes an active bundle.
 """
 from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
 import shutil
 import stat
 import tempfile
+import time
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -238,4 +240,67 @@ def stage_plugin_bundle(target_platform, *, trust_root, stage_parent,
     except BaseException:
         shutil.rmtree(stage, ignore_errors=True)
         raise
+
+
+def arrange_staged_bundle(staged):
+    """Arrange a newly verified stage for the existing Agent host helpers."""
+    root = Path(staged.stage_dir)
+    if root.is_symlink() or not root.is_dir():
+        raise PluginBundleError('plugin stage is not a real directory')
+    for name in ('bin', 'plugins'):
+        (root / name).mkdir(mode=0o700)
+    for source, relative in (
+        (staged.catalog_path, 'plugins/plugin-catalog.json'),
+        (staged.signature_path, 'plugins/plugin-catalog.json.sig'),
+        (staged.agent_path, 'bin/tp-agent'),
+        (staged.image_archive_path, 'plugins/homeassistant-image.tar'),
+    ):
+        source = Path(source)
+        if source.parent != root or source.is_symlink() or not source.is_file():
+            raise PluginBundleError('plugin stage contains an invalid asset')
+        os.replace(source, root / relative)
+    os.chmod(root / 'bin/tp-agent', 0o700)
+    return root
+
+
+def verify_active_bundle(root, trust_root, target_platform, *, require_unexpired=False):
+    """Recheck an already activated bundle, including an expired catalog's signature.
+
+    This is only for restoring an existing Agent. The Agent itself continues to
+    reject expired catalogs for new installations and preparations.
+    """
+    root = Path(root)
+    for directory in (root, root / 'bin', root / 'plugins'):
+        if directory.is_symlink() or not directory.is_dir():
+            raise PluginBundleError('active plugin bundle is not a real directory')
+    catalog_path = root / 'plugins/plugin-catalog.json'
+    signature_path = root / 'plugins/plugin-catalog.json.sig'
+    agent_path = root / 'bin/tp-agent'
+    image_path = root / 'plugins/homeassistant-image.tar'
+    for path, maximum in ((catalog_path, MAX_CATALOG_BYTES), (signature_path, MAX_SIGNATURE_BYTES),
+                          (agent_path, MAX_AGENT_BYTES), (image_path, MAX_IMAGE_ARCHIVE_BYTES)):
+        try:
+            info = path.lstat()
+        except OSError:
+            raise PluginBundleError('active plugin bundle is incomplete') from None
+        if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_size <= 0 or info.st_size > maximum:
+            raise PluginBundleError('active plugin bundle contains an invalid asset')
+    try:
+        raw = catalog_path.read_bytes()
+        verifier = plugin_catalog._verifier()
+        verifier.verify_signature(raw, signature_path.read_bytes(), verifier.load_trust_root(trust_root))
+        catalog = json.loads(raw)
+        if catalog.get('schema') != plugin_catalog.SCHEMA or type(catalog.get('expires_at')) is not int:
+            raise ValueError('invalid catalog')
+        for entry in catalog['plugins']:
+            plugin_catalog.check_entry(entry)
+        plugin_catalog.validate_catalog_bundle(catalog)
+        image_entry = _validate_catalog(catalog, target_platform)
+    except Exception as error:  # noqa: BLE001 - all verifier errors fail closed.
+        raise PluginBundleError('active plugin catalog signature or schema is invalid') from error
+    if require_unexpired and int(time.time()) >= catalog['expires_at']:
+        raise PluginBundleError('pending catalog expired before activation')
+    if _sha256(agent_path) != catalog['agent_sha256'] or _sha256(image_path) != image_entry['image_archive_sha256']:
+        raise PluginBundleError('active plugin bundle digest mismatch')
+    return catalog
 

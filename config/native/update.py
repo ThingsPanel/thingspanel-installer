@@ -39,6 +39,24 @@ RELEASE_VERIFIER_SHA256 = "717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965ee
 RELEASE_MANIFEST = 'release-manifest.json'
 DEFAULT_RELEASE_PUBLISHER = 'https://github.com/ThingsPanel/thingspanel-installer/.github/workflows/release.yml'
 
+# Independent plugin trust anchor, reviewed with the installer source. The
+# signed plugin catalog is never allowed to introduce or replace this key.
+PLUGIN_TRUST_PEM = b'''-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEx5sN5wE3uKMeQNg/GfwdgdECr3Dl
+HwERLCSb0Ng2n3l4djp5nlaxGQdYZFcwGZJ0UhdPyohfgnwpGnu6eZKicw==
+-----END PUBLIC KEY-----
+'''
+# Helpers are independently pinned by the entry-point-pinned updater. Keep old
+# profiles here when changing helper code so an offline last-good bundle can
+# still be restored by a later updater.
+PLUGIN_HELPER_PROFILES = ({
+    'tools/plugin_bundle.py': 'a8fa326430c7433b20dc2cc699b115063be5e498a6a45f533dcf395a34a0ecfa',
+    'tools/plugin_catalog.py': 'fe0c4c4cb5ab9af8bfb08d0003e112c07d87680e62d8017b3d0996fdae0cca21',
+    'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',
+    'tools/agent_host.py': '037dd423bab55cf48b56b27eca736e28eb1e05a6cd75e4a425586b3ac56705f9',
+    'tools/scope_sync.py': 'f995ff0d2fdc23225aadceb9be78709493fd1a5f8f6094173086d63e8cf5e4c1',
+},)
+
 
 COMMON = (
     ('docker-compose.yml', 0o644), ('niginx.conf', 0o644),
@@ -701,7 +719,7 @@ class Transaction:
         entry['applied'] = True
         self.save(data)
 
-    def reconcile_activation(self, plugin_trust_root=None):
+    def reconcile_activation(self, plugin_trust_root=None, *, enable_plugin_bundle=False):
         """Resume an unresolved activation only by re-running its idempotent tail
         (migration bootstrap, compose up, verification).
 
@@ -716,13 +734,35 @@ class Transaction:
             for relative, entry in data.get('activation_files', {}).items():
                 if not entry['applied'] or not same(file_info(safe_target(self.root, relative)), entry['new']):
                     raise UpdateError('Activation configuration is not in its recorded state; manual review is required: ' + relative)
-            catalog = verify_plugin_agent_bundle(self.root, plugin_trust_root)
+            # The managed public flow uses the reviewed embedded trust anchor
+            # and last-good bundle. Do not let an old partial root-level bundle
+            # prevent recovery of the ThingsPanel core or the managed Agent.
+            catalog = False if enable_plugin_bundle else verify_plugin_agent_bundle(self.root, plugin_trust_root)
+            managed = None
             if catalog:
                 preload_homeassistant_image(self.root, catalog)
+            elif enable_plugin_bundle:
+                managed = optional_plugin_for_activation(self.root, plugin_trust_root, allow_download=False)
+                if managed:
+                    try:
+                        preload_homeassistant_image(managed[0], managed[2])
+                    except Exception as error:  # noqa: BLE001 - leave an untrusted bundle inactive.
+                        print('[WARN] Plugin image rejected (%s); platform recovery continues.' % type(error).__name__, file=sys.stderr)
+                        managed = None
             context = {'TP_INSTALLER_ACTIVE_OPERATION': data['operation']}
             prepare = [sys.executable, str(self.root / 'config/native/prepare.py')]
             run_command(prepare + ['--bootstrap', '--refresh-devices'], self.root, extra_env=context)
-            agent_started = start_plugin_agent(self.root, plugin_trust_root, verified_catalog=catalog)
+            if managed:
+                try:
+                    agent_started = start_plugin_agent(self.root, managed[1], verified_catalog=managed[2], bundle_root=managed[0])
+                    if agent_started and managed[3]:
+                        record_active_plugin(self.root, managed[0])
+                        clear_pending_plugin(self.root)
+                except Exception as error:  # noqa: BLE001 - recover the platform even when the optional Agent fails.
+                    print('[WARN] Plugin Agent could not start (%s); platform recovery continues.' % type(error).__name__, file=sys.stderr)
+                    agent_started = False
+            else:
+                agent_started = start_plugin_agent(self.root, plugin_trust_root, verified_catalog=catalog)
             run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], self.root)
             restart_services_with_replaced_mounts(self.root)
             run_command(prepare + ['--verify'], self.root, extra_env=context)
@@ -809,15 +849,218 @@ def restart_services_with_replaced_mounts(root):
     return stale
 
 
-def activate_native(root, plugin_trust_root=None):
+def plugin_bundle_parent(root):
+    root = Path(root).resolve()
+    state = root / '.thingspanel-update'
+    private_directory(state)
+    parent = state / 'plugin-bundles'
+    private_directory(parent)
+    return parent
+
+
+def plugin_trust_root(root, supplied=None):
+    """Use an operator root or materialize the installer's pinned public root outside the payload."""
+    root = Path(root).resolve()
+    if supplied:
+        key = Path(supplied)
+        if not key.is_absolute() or not key.is_file() or key.is_symlink():
+            raise UpdateError('Plugin trust root is unavailable or invalid')
+        key = key.resolve()
+        try:
+            key.relative_to(root)
+        except ValueError:
+            return key
+        raise UpdateError('Plugin trust root must be outside the installer payload')
+    key = root.parent / ('.' + root.name + '-plugin-trust.pem')
+    try:
+        fd = os.open(str(key), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o644)
+    except FileExistsError:
+        info = file_info(key)
+        if info is None or key.read_bytes() != PLUGIN_TRUST_PEM:
+            raise UpdateError('Existing plugin trust root does not match the installer pin')
+    else:
+        with os.fdopen(fd, 'wb') as out:
+            out.write(PLUGIN_TRUST_PEM)
+            out.flush()
+            os.fsync(out.fileno())
+        fsync_directory(key.parent)
+    return key.resolve()
+
+
+def load_plugin_helpers(helper_root):
+    """Load only helper files matching an updater-pinned complete profile."""
+    helper_root = Path(helper_root)
+    if helper_root.is_symlink() or not helper_root.is_dir():
+        raise UpdateError('Plugin helper directory is invalid')
+    matched = False
+    for profile in PLUGIN_HELPER_PROFILES:
+        if all((info := file_info(safe_target(helper_root, name))) is not None and info['sha256'] == digest
+               for name, digest in profile.items()):
+            matched = True
+            break
+    if not matched:
+        raise UpdateError('Plugin helper files do not match the installer pin')
+    previous = sys.modules.get('plugin_catalog')
+    try:
+        catalog_spec = importlib.util.spec_from_file_location('plugin_catalog', helper_root / 'tools/plugin_catalog.py')
+        catalog_module = importlib.util.module_from_spec(catalog_spec)
+        sys.modules['plugin_catalog'] = catalog_module
+        catalog_spec.loader.exec_module(catalog_module)
+        spec = importlib.util.spec_from_file_location('tp_plugin_bundle_bootstrap', helper_root / 'tools/plugin_bundle.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        if previous is None:
+            sys.modules.pop('plugin_catalog', None)
+        else:
+            sys.modules['plugin_catalog'] = previous
+
+
+def active_plugin_directory(root):
+    """Read a private last-good pointer without following paths or symlinks."""
+    return plugin_directory_from_pointer(root, 'current.json', 'Last-good')
+
+
+def pending_plugin_directory(root):
+    """Read a durably staged first-install bundle awaiting Agent activation."""
+    return plugin_directory_from_pointer(root, 'pending.json', 'Pending')
+
+
+def plugin_directory_from_pointer(root, filename, label):
+    parent = plugin_bundle_parent(root)
+    pointer = parent / filename
+    if file_info(pointer) is None:
+        return None
+    try:
+        value = json.loads(pointer.read_text(encoding='utf-8'))
+        name = value['directory']
+        if not isinstance(name, str) or re.fullmatch(r'tp-plugin-bundle-[A-Za-z0-9_-]+', name) is None:
+            raise ValueError()
+        directory = parent / name
+        if directory.is_symlink() or not directory.is_dir():
+            raise ValueError()
+        return directory
+    except (KeyError, TypeError, ValueError, OSError):
+        raise UpdateError(label + ' plugin bundle pointer is invalid') from None
+
+
+def record_active_plugin(root, bundle):
+    write_plugin_pointer(root, bundle, 'current.json', 'activated')
+
+
+def record_pending_plugin(root, bundle):
+    write_plugin_pointer(root, bundle, 'pending.json', 'pending')
+
+
+def write_plugin_pointer(root, bundle, filename, label):
+    parent = plugin_bundle_parent(root)
+    bundle = Path(bundle)
+    if bundle.parent != parent or bundle.is_symlink() or not bundle.is_dir() or re.fullmatch(r'tp-plugin-bundle-[A-Za-z0-9_-]+', bundle.name) is None:
+        raise UpdateError('Plugin bundle cannot be recorded outside its private directory')
+    pointer = parent / filename
+    file_info(pointer)  # Refuse an existing symlink or non-regular pointer.
+    durable_bytes(pointer, (json.dumps({'directory': bundle.name}, sort_keys=True) + '\n').encode(), 0o600)
+
+
+def clear_pending_plugin(root):
+    pointer = plugin_bundle_parent(root) / 'pending.json'
+    if file_info(pointer) is not None:
+        pointer.unlink()
+        fsync_directory(pointer.parent)
+
+
+def prepare_optional_plugin(root, supplied_trust_root=None, *, allow_download=False,
+                            source='https://install.thingspanel.io'):
+    """Verify an active bundle, or stage a new one without touching the active pointer."""
+    root = Path(root).resolve()
+    parent = plugin_bundle_parent(root)
+    active = active_plugin_directory(root)
+    pending = pending_plugin_directory(root) if active is None else None
+    if active is None and pending is None and not allow_download:
+        return None
+    trust = plugin_trust_root(root, supplied_trust_root)
+    platform = normalize_platform(run_command(['docker', 'info', '--format', '{{.OSType}}/{{.Architecture}}'], root).decode().strip())
+    if active is not None:
+        if pending_plugin_directory(root) == active:
+            clear_pending_plugin(root)
+        helpers = load_plugin_helpers(active)
+        catalog = helpers.verify_active_bundle(active, trust, platform)
+        return active, trust, catalog, False
+    if pending is not None:
+        helpers = load_plugin_helpers(pending)
+        try:
+            catalog = helpers.verify_active_bundle(pending, trust, platform, require_unexpired=True)
+        except Exception as error:  # noqa: BLE001 - only an authenticated expired marker is eligible for refresh.
+            if 'pending catalog expired before activation' not in str(error) or not allow_download:
+                raise
+            # This pointer was created by this updater but never activated. Keep
+            # the expired bundle intact for diagnosis; remove only its pointer,
+            # then stage the current independently signed release.
+            clear_pending_plugin(root)
+            pending = None
+        else:
+            return pending, trust, catalog, True
+    helper_root = Path(tempfile.mkdtemp(prefix='tp-plugin-helpers-', dir=parent))
+    os.chmod(helper_root, 0o700)
+    try:
+        for relative, digest in PLUGIN_HELPER_PROFILES[0].items():
+            target = safe_target(helper_root, relative)
+            download(source.rstrip('/') + '/' + relative, target)
+            info = file_info(target)
+            if info is None or info['sha256'] != digest:
+                raise UpdateError('Downloaded plugin helper does not match the installer pin: ' + relative)
+        helpers = load_plugin_helpers(helper_root)
+        staged = helpers.stage_plugin_bundle(platform, trust_root=trust, stage_parent=parent)
+        bundle = helpers.arrange_staged_bundle(staged)
+        # Move only the helper files we just downloaded and pinned; no active bundle is touched.
+        for relative in PLUGIN_HELPER_PROFILES[0]:
+            destination = safe_target(bundle, relative)
+            make_directories(destination.parent, 0o700)
+            os.replace(safe_target(helper_root, relative), destination)
+        helpers = load_plugin_helpers(bundle)
+        catalog = helpers.verify_active_bundle(bundle, trust, platform, require_unexpired=True)
+        # Persist the candidate before Docker/Agent side effects so activation can
+        # resume after a host crash without downloading or creating a new instance.
+        record_pending_plugin(root, bundle)
+        return bundle, trust, catalog, True
+    finally:
+        shutil.rmtree(helper_root, ignore_errors=True)
+
+
+def optional_plugin_for_activation(root, supplied_trust_root=None, *, allow_download=False,
+                                   source='https://install.thingspanel.io'):
+    """Plugin delivery is optional: a rejected bundle must not stop the platform itself."""
+    try:
+        return prepare_optional_plugin(root, supplied_trust_root, allow_download=allow_download, source=source)
+    except Exception as error:  # noqa: BLE001 - never execute/load a rejected optional bundle.
+        print('[WARN] Plugin bundle unavailable (%s); platform startup continues.' % type(error).__name__, file=sys.stderr)
+        return None
+
+
+def activate_native(root, plugin_trust_root=None, *, enable_plugin_bundle=False,
+                    source='https://install.thingspanel.io'):
     """Existing native entry point, after commit, under the same process lock."""
     prepare = [sys.executable, str(root / 'config/native/prepare.py')]
     current = Transaction(root).load()
     if current is None or current['phase'] != 'activation_started':
         raise UpdateError('Native activation requires its persistent operation')
-    catalog = verify_plugin_agent_bundle(root, plugin_trust_root)
+    # New install/upgrade flow uses the pinned managed bundle. Older root-level
+    # files may be partial or require an obsolete out-of-band key; they remain
+    # untouched and cannot block the current platform activation.
+    catalog = False if enable_plugin_bundle else verify_plugin_agent_bundle(root, plugin_trust_root)
+    managed = None
     if catalog:
         preload_homeassistant_image(root, catalog)
+    elif enable_plugin_bundle:
+        managed = optional_plugin_for_activation(root, plugin_trust_root, allow_download=True, source=source)
+        if managed:
+            try:
+                preload_homeassistant_image(managed[0], managed[2])
+            except Exception as error:  # noqa: BLE001 - do not activate a rejected optional image.
+                print('[WARN] Plugin image rejected (%s); platform startup continues.' % type(error).__name__, file=sys.stderr)
+                managed = None
     context = {'TP_INSTALLER_ACTIVE_OPERATION': current['operation']}
 
     def native(*args):
@@ -855,7 +1098,17 @@ def activate_native(root, plugin_trust_root=None):
         native('--pull')
     print('Applying the existing native migration and service preparation.', flush=True)
     native('--bootstrap', '--refresh-devices')
-    agent_started = start_plugin_agent(root, plugin_trust_root, verified_catalog=catalog)
+    if managed:
+        try:
+            agent_started = start_plugin_agent(root, managed[1], verified_catalog=managed[2], bundle_root=managed[0])
+            if agent_started and managed[3]:
+                record_active_plugin(root, managed[0])
+                clear_pending_plugin(root)
+        except Exception as error:  # noqa: BLE001 - keep platform startup independent of the optional plugin.
+            print('[WARN] Plugin Agent could not start (%s); platform startup continues.' % type(error).__name__, file=sys.stderr)
+            agent_started = False
+    else:
+        agent_started = start_plugin_agent(root, plugin_trust_root, verified_catalog=catalog)
     run_command(['docker', 'compose', 'up', '-d', '--wait', '--wait-timeout', '240'], root)
     restart_services_with_replaced_mounts(root)
     native('--verify')
@@ -967,7 +1220,7 @@ def verify_plugin_agent_bundle(root, plugin_trust_root=None):
     return load_verified_plugin_catalog(root, trust_root)
 
 
-def start_plugin_agent(root, plugin_trust_root=None, verified_catalog=None):
+def start_plugin_agent(root, plugin_trust_root=None, verified_catalog=None, bundle_root=None):
     """Start the already-verified plugin Agent after DB/network bootstrap but before the backend."""
     root = Path(root).resolve()
     catalog_data = verified_catalog if verified_catalog is not None else verify_plugin_agent_bundle(root, plugin_trust_root)
@@ -975,11 +1228,12 @@ def start_plugin_agent(root, plugin_trust_root=None, verified_catalog=None):
         return False
     if verified_catalog is None:
         preload_homeassistant_image(root, catalog_data)
-    agent_bin = root / 'bin/tp-agent'
-    catalog = root / 'plugins/plugin-catalog.json'
+    bundle = Path(bundle_root).resolve() if bundle_root is not None else root
+    agent_bin = bundle / 'bin/tp-agent'
+    catalog = bundle / 'plugins/plugin-catalog.json'
     trust_root = Path(plugin_trust_root).resolve()
     run_command([
-        sys.executable, str(root / 'tools/agent_host.py'), 'up',
+        sys.executable, str(bundle / 'tools/agent_host.py'), 'up',
         '--stack-dir', str(root), '--agent-dir', str(root / '.tp-agent'),
         '--agent-bin', str(agent_bin), '--catalog', str(catalog), '--trust-root', str(trust_root),
         '--defer-scope-watcher',
@@ -990,7 +1244,14 @@ def start_plugin_agent(root, plugin_trust_root=None, verified_catalog=None):
 def start_scope_watcher_after_activation(root):
     """Start the optional Broker scope watcher after the transaction lock is released."""
     root = Path(root).resolve()
-    scope_sync_path = root / 'tools/scope_sync.py'
+    try:
+        active = active_plugin_directory(root)
+        if active:
+            load_plugin_helpers(active)
+        scope_sync_path = (active or root) / 'tools/scope_sync.py'
+    except Exception as error:  # noqa: BLE001 - do not load unverified helper code.
+        print('[WARN] Plugin scope watcher is unavailable (%s).' % type(error).__name__, file=sys.stderr)
+        return False
     spec = importlib.util.spec_from_file_location('tp_installer_scope_sync', scope_sync_path)
     if spec is None or spec.loader is None:
         print('[WARN] Plugin Agent is running but its Broker scope watcher could not load; retry with tools/scope_sync.py ensure.',
@@ -1043,12 +1304,28 @@ def main():
             print('[WARN] No release trust root configured; the release signature is not verified.', file=sys.stderr)
         transaction = Transaction(args.root, release_policy=policy)
         if args.reconcile_activation:
-            transaction.reconcile_activation(args.plugin_trust_root or None)
+            agent_started = transaction.reconcile_activation(args.plugin_trust_root or None, enable_plugin_bundle=True)
             print('Activation reconciled.')
+            if not agent_started:
+                print('[WARN] ThingsPanel recovery completed, but the HA plugin Agent is not active. Re-run the installer after fixing the plugin release or host issue.', file=sys.stderr)
+                return 2
             return 0
-        transaction.run(args.base_url, expected_version=args.expected_version,
-                        activate=lambda install_root: activate_native(install_root, args.plugin_trust_root or None),
+        unresolved = None if args.recover_config_only else transaction.load()
+        if unresolved is not None and unresolved['phase'] == 'activation_started':
+            print('Resuming the previous interrupted ThingsPanel activation.', flush=True)
+            agent_started = transaction.reconcile_activation(args.plugin_trust_root or None, enable_plugin_bundle=True)
+            print('Interrupted activation recovered.')
+            if not agent_started:
+                print('[WARN] ThingsPanel recovery completed, but the HA plugin Agent is not active. Fix the plugin or host issue and re-run the installer.', file=sys.stderr)
+                return 2
+            return 0
+        agent_started = transaction.run(args.base_url, expected_version=args.expected_version,
+                        activate=lambda install_root: activate_native(install_root, args.plugin_trust_root or None,
+                                                                     enable_plugin_bundle=True, source=args.base_url),
                         recovery_only=args.recover_config_only)
+        if not args.recover_config_only and not agent_started:
+            print('[WARN] ThingsPanel core is running, but the HA plugin Agent is not active. Fix the reported plugin or host issue and re-run the installer.', file=sys.stderr)
+            return 2
         print('Configuration recovery complete.' if args.recover_config_only else 'Installation operation completed.')
     except (UpdateError, OSError) as error:
         # Avoid arbitrary subprocess output or URLs in the error channel.

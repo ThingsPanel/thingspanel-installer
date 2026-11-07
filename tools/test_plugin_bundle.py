@@ -143,6 +143,42 @@ class PluginBundle(unittest.TestCase):
         self.assertEqual(len(calls), 4)
         self.assertEqual(list(self.stage_parent.iterdir()), [])
 
+    def test_active_bundle_accepts_signed_expired_catalog_but_rejects_tampering(self):
+        _, assets = self.signed_files()
+        staged = self.stage('linux/amd64', assets, [])
+        root = plugin_bundle.arrange_staged_bundle(staged)
+        catalog_path = root / 'plugins/plugin-catalog.json'
+        signature_path = root / 'plugins/plugin-catalog.json.sig'
+        catalog = json.loads(catalog_path.read_bytes())
+        catalog['expires_at'] = int(time.time()) - 1
+        raw = json.dumps(catalog, sort_keys=True, indent=1).encode()
+        catalog_path.write_bytes(raw)
+        signature_path.write_bytes(subprocess.run(['openssl', 'dgst', '-sha256', '-sign', str(self.key)],
+                                                  input=raw, stdout=subprocess.PIPE, check=True).stdout)
+        with self.assertRaisesRegex(ValueError, 'expired'):
+            plugin_catalog.load_verified(catalog_path, self.trust_root)
+        self.assertEqual(plugin_bundle.verify_active_bundle(root, self.trust_root, 'linux/amd64'), catalog)
+        (root / 'bin/tp-agent').write_bytes(b'tampered')
+        with self.assertRaisesRegex(plugin_bundle.PluginBundleError, 'digest mismatch'):
+            plugin_bundle.verify_active_bundle(root, self.trust_root, 'linux/amd64')
+        (root / 'bin/tp-agent').write_bytes(self.agent)
+        (root / 'plugins/homeassistant-image.tar').write_bytes(b'tampered')
+        with self.assertRaisesRegex(plugin_bundle.PluginBundleError, 'digest mismatch'):
+            plugin_bundle.verify_active_bundle(root, self.trust_root, 'linux/amd64')
+        (root / 'plugins/homeassistant-image.tar').write_bytes(self.image)
+        signature_path.write_bytes(b'tampered')
+        with self.assertRaisesRegex(plugin_bundle.PluginBundleError, 'signature or schema'):
+            plugin_bundle.verify_active_bundle(root, self.trust_root, 'linux/amd64')
+
+    def test_active_bundle_rejects_symlinked_assets(self):
+        _, assets = self.signed_files()
+        root = plugin_bundle.arrange_staged_bundle(self.stage('linux/amd64', assets, []))
+        agent = root / 'bin/tp-agent'
+        agent.unlink()
+        agent.symlink_to(self.tmp / 'external-agent')
+        with self.assertRaisesRegex(plugin_bundle.PluginBundleError, 'invalid asset'):
+            plugin_bundle.verify_active_bundle(root, self.trust_root, 'linux/amd64')
+
     def test_size_limit_rejected_and_private_stage_removed(self):
         _, assets = self.signed_files()
         calls = []

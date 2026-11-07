@@ -11,13 +11,11 @@
 set -eu
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
-REPO="ThingsPanel/thingspanel-installer"
 RAW_BASE="https://install.thingspanel.io"
 INSTALL_DIR="${INSTALL_DIR:-/opt/thingspanel}"
 HTTP_PORT="${HTTP_PORT:-8080}"
 MQTT_PORT="${MQTT_PORT:-1883}"
 MIN_DOCKER_VERSION="20.10"
-MIN_COMPOSE_VERSION="2.0"
 SUDO_CMD=""
 UPDATE_ENGINE_SHA256="d6949b8f5422725bb6bfcb311f87f52b5622c9138f131ca34e9214093286e8b5"
 
@@ -215,8 +213,7 @@ check_os() {
     OS="$(uname -s)"
     ARCH="$(uname -m)"
     case "$OS" in
-        Linux)  OS_TYPE="linux" ;;
-        Darwin) OS_TYPE="macos" ;;
+        Linux|Darwin) ;;
         *)      error "不支持的操作系统: $OS（请在 Linux 或 macOS 上运行）" ;;
     esac
     success "操作系统: $OS ($ARCH)"

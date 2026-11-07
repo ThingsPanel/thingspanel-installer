@@ -30,6 +30,7 @@ class ThingsVisDatabaseGuardTest(unittest.TestCase):
             with self.subTest(url=url):
                 prepare.validate_thingsvis_database(self.configuration(url))
 
+
     def test_mysql_and_missing_configuration_are_rejected_without_echoing_values(self):
         for config in (self.configuration('mysql://example-secret@example/db'),
                        self.configuration(None), {'services': {}}):
@@ -162,6 +163,31 @@ class ThingsVisDatabaseGuardTest(unittest.TestCase):
                             self.assertFalse(list(root.glob('docker-compose.yml.bak.*')))
                         else:
                             self.assertTrue((root / 'curl.log').exists(), 'historical PostgreSQL must pass the guard')
+
+
+class BackendDatabaseGuardTest(unittest.TestCase):
+    def configuration(self, *, host='postgres', password='postgresThingsPanel'):
+        env = {
+            'GOTP_DB_PSQL_HOST': host,
+            'GOTP_DB_PSQL_PORT': '5432',
+            'GOTP_DB_PSQL_USERNAME': 'postgres',
+            'GOTP_DB_PSQL_DBNAME': 'ThingsPanel',
+            'GOTP_RELATIONAL_DRIVER': 'postgres',
+            'GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST': host,
+            'GOTP_RELATIONAL_POSTGRES_PLATFORM_PORT': '5432',
+            'GOTP_RELATIONAL_POSTGRES_PLATFORM_DATABASE': 'ThingsPanel',
+            'GOTP_RELATIONAL_POSTGRES_PLATFORM_USERNAME': 'postgres',
+            'GOTP_RELATIONAL_POSTGRES_PLATFORM_PASSWORD': password,
+        }
+        return {'services': {'backend': {'environment': env}, 'postgres': {}}}
+
+    def test_unresolved_password_is_allowed_before_generated_env_secrets_exist(self):
+        prepare.validate_supported_backend_database(
+            self.configuration(password='${TP_DATABASE_PASSWORD:-postgresThingsPanel}'))
+
+    def test_unresolved_database_location_is_not_allowed(self):
+        with self.assertRaisesRegex(RuntimeError, 'supported PostgreSQL'):
+            prepare.validate_supported_backend_database(self.configuration(host='${DATABASE_HOST:-postgres}'))
 
 
 if __name__ == '__main__':

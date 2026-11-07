@@ -139,10 +139,19 @@ def validate_supported_backend_database(config):
     )
     relational_keys = [key for key in env if key.startswith('GOTP_RELATIONAL_')]
     if relational_keys:
-        if env.get('GOTP_RELATIONAL_DRIVER') != 'postgres' or any(
-            not isinstance(env.get(key), (str, int)) or not str(env[key]).strip() or '$' in str(env[key])
-            for key in relational_required
-        ):
+        # Compose's --no-interpolate preflight is used before generated .env
+        # secrets exist. The provider, host, port, database and user must still
+        # be concrete; only the password may remain an interpolation expression
+        # because its value does not change the selected storage contract.
+        unresolved = [
+            key for key in relational_required[:-1]
+            if not isinstance(env.get(key), (str, int))
+            or not str(env[key]).strip()
+            or '$' in str(env[key])
+        ]
+        password = env.get('GOTP_RELATIONAL_POSTGRES_PLATFORM_PASSWORD')
+        if (env.get('GOTP_RELATIONAL_DRIVER') != 'postgres' or unresolved
+                or not isinstance(password, (str, int)) or not str(password).strip()):
             raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')
         if env['GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST'] == 'postgres' and not isinstance(services.get('postgres'), dict):
             raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')

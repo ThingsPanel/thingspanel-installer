@@ -388,7 +388,8 @@ class BackendImageVersion(unittest.TestCase):
         stage.mkdir()
         config = {'services': {'backend': {'image': image}}}
         text = 'UPDATE_ENGINE_SHA256="' + __import__('hashlib').sha256(Path(update.__file__).read_bytes()).hexdigest() + '"\n'
-        (stage / 'upgrade.sh').write_text(text)
+        entrypoint = 'upgrade.ps1' if os.name == 'nt' else 'upgrade.sh'
+        (stage / entrypoint).write_text(text)
         tx.artifacts = []
         with mock.patch.object(update, 'render_with_fallback', return_value=config):
             tx.validate(stage, version)

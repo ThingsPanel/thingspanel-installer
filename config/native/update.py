@@ -111,9 +111,10 @@ def replace(source, destination):
                 # replacement and restore it if replacement fails.
                 os.chmod(destination, previous_mode | stat.S_IWRITE)
         if not move(str(source), str(destination), 0x1 | 0x8):
+            error_code = ctypes.get_last_error()
             if previous_mode is not None and not previous_mode & stat.S_IWRITE:
                 os.chmod(destination, previous_mode)
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise ctypes.WinError(error_code)
     else:
         os.replace(source, destination)
     fsync_directory(destination.parent)
@@ -190,8 +191,8 @@ def durable_bytes(path, content, mode=0o600, ownership=None):
             # Keep the source writable until MoveFileExW has consumed it.
             # Windows maps POSIX 0440 to a read-only attribute, which blocks
             # both replacement and cleanup; apply the requested mode afterward.
-            temporary_mode = 0o600 if os.name == 'nt' else mode
-            os.fchmod(stream.fileno(), temporary_mode) if hasattr(os, 'fchmod') else os.chmod(temporary, temporary_mode)
+            if os.name != 'nt':
+                os.fchmod(stream.fileno(), mode) if hasattr(os, 'fchmod') else os.chmod(temporary, mode)
             if ownership is not None and os.name != 'nt':
                 info = os.fstat(stream.fileno())
                 if (info.st_uid, info.st_gid) != (ownership['uid'], ownership['gid']):

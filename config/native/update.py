@@ -102,7 +102,17 @@ def replace(source, destination):
         move = ctypes.WinDLL('kernel32', use_last_error=True).MoveFileExW
         move.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
         move.restype = ctypes.c_int
+        previous_mode = None
+        if destination.exists():
+            previous_mode = stat.S_IMODE(destination.stat().st_mode)
+            if not previous_mode & stat.S_IWRITE:
+                # Windows represents the broker's POSIX 0440 mode as the
+                # read-only file attribute. Clear it only for the atomic
+                # replacement and restore it if replacement fails.
+                os.chmod(destination, previous_mode | stat.S_IWRITE)
         if not move(str(source), str(destination), 0x1 | 0x8):
+            if previous_mode is not None and not previous_mode & stat.S_IWRITE:
+                os.chmod(destination, previous_mode)
             raise ctypes.WinError(ctypes.get_last_error())
     else:
         os.replace(source, destination)
@@ -177,13 +187,19 @@ def durable_bytes(path, content, mode=0o600, ownership=None):
         with os.fdopen(fd, 'wb') as stream:
             stream.write(content)
             stream.flush()
-            os.fchmod(stream.fileno(), mode) if hasattr(os, 'fchmod') else os.chmod(temporary, mode)
+            # Keep the source writable until MoveFileExW has consumed it.
+            # Windows maps POSIX 0440 to a read-only attribute, which blocks
+            # both replacement and cleanup; apply the requested mode afterward.
+            temporary_mode = 0o600 if os.name == 'nt' else mode
+            os.fchmod(stream.fileno(), temporary_mode) if hasattr(os, 'fchmod') else os.chmod(temporary, temporary_mode)
             if ownership is not None and os.name != 'nt':
                 info = os.fstat(stream.fileno())
                 if (info.st_uid, info.st_gid) != (ownership['uid'], ownership['gid']):
                     os.fchown(stream.fileno(), ownership['uid'], ownership['gid'])
             os.fsync(stream.fileno())
         replace(temporary, path)
+        if os.name == 'nt':
+            os.chmod(path, mode)
     finally:
         if temporary.exists():
             temporary.unlink()

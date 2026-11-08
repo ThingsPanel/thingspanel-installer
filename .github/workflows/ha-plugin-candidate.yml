@@ -1,7 +1,7 @@
 name: Build signed Home Assistant plugin candidate
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       version:
         description: Plugin version, for example 1.0.0
@@ -19,6 +19,13 @@ on:
         description: Full commit referenced by the SDK tag
         required: true
         type: string
+      installer_commit:
+        description: Full reviewed installer commit containing this workflow and its build inputs
+        required: true
+        type: string
+    secrets:
+      TP_PLUGIN_CATALOG_SIGNING_KEY:
+        required: true
 
 permissions:
   contents: read
@@ -33,6 +40,8 @@ jobs:
         arch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.installer_commit }}
       - name: Validate release inputs
         env:
           VERSION: ${{ inputs.version }}
@@ -82,7 +91,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           CONNECTOR_COMMIT: ${{ inputs.connector_commit }}
           SDK_COMMIT: ${{ inputs.sdk_commit }}
-          INSTALLER_COMMIT: ${{ github.sha }}
+          INSTALLER_COMMIT: ${{ inputs.installer_commit }}
           SIGNING_KEY: ${{ secrets.TP_PLUGIN_CATALOG_SIGNING_KEY }}
         run: |
           set -euo pipefail

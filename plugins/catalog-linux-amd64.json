@@ -1,0 +1,57 @@
+{
+ "agent_sha256": "fbae4ca150617ea761ed27ce487be62264a01f14ccbff4b64b189ed2604200ca",
+ "expires_at": 2109463206,
+ "plugins": [
+  {
+   "args": [],
+   "description": "Home Assistant device connector: HA state_changed events become ThingsPanel telemetry, platform commands call HA services.",
+   "entrypoint": "/usr/local/bin/homeassistant-service",
+   "env": [
+    "CONNECTOR_SERVICE_IDENTIFIER=homeassistant",
+    "CONNECTOR_INSTANCE_ID=homeassistant-1",
+    "THINGSPANEL_BACKEND_URL=http://backend:9999",
+    "TP_MQTT_BROKER=tcp://mosquitto:1883",
+    "LOG_LEVEL=info"
+   ],
+   "env_from_stack": {
+    "TP_MQTT_PASS": "TP_PROTOCOL_MQTT_PASSWORD",
+    "TP_MQTT_USER": "TP_PROTOCOL_MQTT_USER"
+   },
+   "health": {
+    "path": "/health",
+    "port": 9001
+   },
+   "id": "homeassistant",
+   "identity": {
+    "token_env": "TP_PLUGIN_RUNTIME_TOKEN"
+   },
+   "image_archive_sha256": "8fd426bc22c249f0f32a1eca00b17c0a2925f0ce7e24593b8b15e96b48a2776f",
+   "image_id": "sha256:5c6f846e610d3a4392561a7d846bcb4237a2cfda207e9bcee9febc922552795b",
+   "image_platform": "linux/amd64",
+   "installer_commit": "1f2f5a96cf5617b468460634e0616d25e8fecafc",
+   "kind": "service",
+   "platform": {
+    "binding": "none",
+    "http_port": 9001,
+    "service_identifier": "homeassistant",
+    "service_plugin": {
+     "config": {
+      "http_address": "{alias}:{http_port}",
+      "sub_topic_prefix": "plugin/homeassistant/"
+     },
+     "description": "Home Assistant device connector (installed by the plugin installer)",
+     "name": "Home Assistant",
+     "service_type": 2
+    }
+   },
+   "sdk_commit": "fa39f24ea7bdcbe781029ec515713e7804250134",
+   "source_commit": "0b3240e060def50e124495f478a79ea9d1809ab0",
+   "version": "1.0.0"
+  }
+ ],
+ "published_at": 1794103206,
+ "release_tag": "plugin-ha-v1.0.0",
+ "schema": "thingspanel.plugin-catalog.v1",
+ "target_platform": "linux/amd64",
+ "version": "1.0.0"
+}

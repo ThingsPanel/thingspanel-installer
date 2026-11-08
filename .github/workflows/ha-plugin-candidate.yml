@@ -1,0 +1,116 @@
+name: Build signed Home Assistant plugin candidate
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Plugin version, for example 1.0.0
+        required: true
+        type: string
+      connector_commit:
+        description: Full reviewed Home Assistant connector commit
+        required: true
+        type: string
+      sdk_tag:
+        description: Published connector SDK tag used by the connector
+        required: true
+        type: string
+      sdk_commit:
+        description: Full commit referenced by the SDK tag
+        required: true
+        type: string
+      installer_commit:
+        description: Full reviewed installer commit containing this workflow and its build inputs
+        required: true
+        type: string
+    secrets:
+      TP_PLUGIN_CATALOG_SIGNING_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.installer_commit }}
+      - name: Validate release inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          CONNECTOR_COMMIT: ${{ inputs.connector_commit }}
+          SDK_TAG: ${{ inputs.sdk_tag }}
+          SDK_COMMIT: ${{ inputs.sdk_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$CONNECTOR_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SDK_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SDK_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git ls-remote --tags https://github.com/ThingsPanel/device-connector-sdk-go.git "refs/tags/$SDK_TAG" "refs/tags/$SDK_TAG^{}" > "$RUNNER_TEMP/sdk-ref"
+          actual=$(awk '/\^\{\}$/ {print $1; found=1} END {if (!found) {}}' "$RUNNER_TEMP/sdk-ref")
+          if [ -z "$actual" ]; then actual=$(awk 'NR==1 {print $1}' "$RUNNER_TEMP/sdk-ref"); fi
+          test "$actual" = "$SDK_COMMIT"
+      - uses: actions/checkout@v4
+        with:
+          repository: ThingsPanel/thingspanel-device-connector-homeassistant
+          ref: ${{ inputs.connector_commit }}
+          path: ha-connector
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build architecture-specific Agent and connector image
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ inputs.version }}
+          CONNECTOR_COMMIT: ${{ inputs.connector_commit }}
+          SDK_TAG: ${{ inputs.sdk_tag }}
+        run: |
+          set -euo pipefail
+          test "$(git -C ha-connector rev-parse HEAD)" = "$CONNECTOR_COMMIT"
+          test -z "$(git -C ha-connector status --porcelain)"
+          python3 -c 'import pathlib,sys; s=pathlib.Path("ha-connector/go.mod").read_text(); assert "replace github.com/thingspanel/device-connector-sdk-go" not in s; assert ("github.com/thingspanel/device-connector-sdk-go " + sys.argv[1]) in s' "$SDK_TAG"
+          mkdir -p out
+          (cd agent && GOOS=linux GOARCH="$ARCH" CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "../out/tp-agent-linux-$ARCH" ./cmd/tp-agent)
+          docker buildx build --platform "linux/$ARCH" --provenance=false --load --tag "thingspanel/homeassistant-connector:$VERSION-$ARCH" ha-connector
+          docker image inspect "thingspanel/homeassistant-connector:$VERSION-$ARCH" > "$RUNNER_TEMP/image.json"
+          python3 -c 'import json,os,pathlib; i=json.loads(pathlib.Path(os.environ["RUNNER_TEMP"],"image.json").read_text())[0]; assert i["Os"]=="linux" and i["Architecture"]==os.environ["ARCH"]; assert not (i.get("Config",{}).get("Labels") or i.get("Config",{}).get("Volumes") or i.get("Config",{}).get("OnBuild")); pathlib.Path(os.environ["RUNNER_TEMP"],"image-id").write_text(i["Id"])'
+          docker save -o "out/ha-image-linux-$ARCH.tar" "thingspanel/homeassistant-connector:$VERSION-$ARCH"
+      - name: Sign and verify the catalog
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ inputs.version }}
+          CONNECTOR_COMMIT: ${{ inputs.connector_commit }}
+          SDK_COMMIT: ${{ inputs.sdk_commit }}
+          INSTALLER_COMMIT: ${{ inputs.installer_commit }}
+          SIGNING_KEY: ${{ secrets.TP_PLUGIN_CATALOG_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SIGNING_KEY"
+          umask 077
+          key="$RUNNER_TEMP/plugin-signing-key.pem"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          export IMAGE_ID="$(cat "$RUNNER_TEMP/image-id")"
+          export IMAGE_SHA="$(sha256sum "out/ha-image-linux-$ARCH.tar" | cut -d' ' -f1)"
+          export AGENT_SHA="$(sha256sum "out/tp-agent-linux-$ARCH" | cut -d' ' -f1)"
+          python3 -c 'import json,os,pathlib; e=json.loads(pathlib.Path("plugins/homeassistant.json").read_text()); e.update(version=os.environ["VERSION"], image_id=os.environ["IMAGE_ID"], image_platform="linux/"+os.environ["ARCH"], image_archive_sha256=os.environ["IMAGE_SHA"], source_commit=os.environ["CONNECTOR_COMMIT"], sdk_commit=os.environ["SDK_COMMIT"], installer_commit=os.environ["INSTALLER_COMMIT"]); pathlib.Path(os.environ["RUNNER_TEMP"],"homeassistant.json").write_text(json.dumps(e,sort_keys=True,indent=2)+"\n")'
+          python3 tools/plugin_catalog.py publish --key "$key" --out "$RUNNER_TEMP/catalog" --version "$VERSION" --valid-days 3650 --plugin-file "$RUNNER_TEMP/homeassistant.json" --target-platform "linux/$ARCH" --release-tag "plugin-ha-v$VERSION" --agent-sha256 "$AGENT_SHA"
+          python3 tools/plugin_catalog.py verify --trust-root config/native/plugin_catalog_trust.pem --catalog "$RUNNER_TEMP/catalog/plugin-catalog.json"
+          cp "$RUNNER_TEMP/catalog/plugin-catalog.json" "out/catalog-linux-$ARCH.json"
+          cp "$RUNNER_TEMP/catalog/plugin-catalog.json.sig" "out/catalog-linux-$ARCH.json.sig"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homeassistant-plugin-linux-${{ matrix.arch }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 14

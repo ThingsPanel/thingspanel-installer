@@ -41,11 +41,9 @@ english.InstallingServices=Starting ThingsPanel services. The first start may ta
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\..\docker-compose.yml"; DestDir: "{app}"; Flags: ignoreversion
+; Configuration and management scripts must go through the locked updater.
 Source: "..\..\install.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\install.core.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\upgrade.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\uninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "assets\ThingsPanel.bat"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

@@ -28,6 +28,11 @@ Desktop.ini
 packaging/macos/.build/
 *.bak
 *.bak.*
+.thingspanel-update/
+__pycache__/
+# Isolated regression temporary roots (sandbox tempfile may choose cwd).
+tp-stage-synthetic-*/
+tp-update-unit-*/
 
 # IDE
 .vscode/settings.json

@@ -15,11 +15,16 @@ on:
       - 'uninstall.ps1'
       - '*.bash'
       - 'config/native/**'
+      - 'tests/**'
       - 'packaging/**'
       - '.github/workflows/validate.yml'
+      - '.github/workflows/update-transaction.yml'
       - '.github/workflows/release.yml'
 
 jobs:
+  update-transaction:
+    uses: ./.github/workflows/update-transaction.yml
+
   validate:
     runs-on: ubuntu-latest
     steps:

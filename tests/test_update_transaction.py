@@ -102,6 +102,34 @@ class TransactionTests(unittest.TestCase):
         for relative in update.WATCHED:
             self.assertTrue(update.same(update.file_info(self.root / relative), old[relative]))
 
+    def test_scope_watcher_starts_after_activation_releases_update_lock(self):
+        tx = self.tx()
+        self.originals(tx)
+        activated = []
+
+        def activate(root):
+            self.assertEqual(root, self.root)
+            with self.assertRaisesRegex(update.UpdateError, 'Another installer'):
+                with update.update_lock(tx.state):
+                    pass
+            return True
+
+        def start_watcher(root):
+            self.assertEqual(root, self.root)
+            with update.update_lock(tx.state):
+                activated.append(root)
+
+        with mock.patch.object(update, 'start_scope_watcher_after_activation', side_effect=start_watcher):
+            self.assertTrue(tx.run(BASE, activate=activate, expected_version='v-fixture'))
+        self.assertEqual(activated, [self.root])
+
+    def test_no_plugin_agent_keeps_old_install_without_scope_sync_dependency(self):
+        tx = self.tx()
+        self.originals(tx)
+        with mock.patch.object(update, 'start_scope_watcher_after_activation') as watcher:
+            self.assertFalse(tx.run(BASE, activate=lambda _: False, expected_version='v-fixture'))
+        watcher.assert_not_called()
+
     def test_management_file_download_failures_leave_entire_payload_unchanged(self):
         tx = self.tx()
         old = self.originals(tx)

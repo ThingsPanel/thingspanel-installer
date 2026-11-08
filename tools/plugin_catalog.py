@@ -21,6 +21,40 @@ import time
 
 SCHEMA = 'thingspanel.plugin-catalog.v1'
 REPO = Path(__file__).resolve().parents[1]
+SUPPORTED_PLUGIN_PLATFORMS = frozenset(('linux/amd64', 'linux/arm64'))
+RELEASE_TAG_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
+SHA256_RE = re.compile(r'^[0-9a-f]{64}$')
+
+
+def validate_bundle_metadata(target_platform, release_tag, agent_sha256):
+    """Validate optional per-architecture installer bundle metadata."""
+    supplied = (target_platform is not None, release_tag is not None, agent_sha256 is not None)
+    if any(supplied) and not all(supplied):
+        raise ValueError('target_platform, release_tag and agent_sha256 must be supplied together')
+    if not any(supplied):
+        return None
+    if target_platform not in SUPPORTED_PLUGIN_PLATFORMS:
+        raise ValueError('target_platform must be linux/amd64 or linux/arm64')
+    if (not isinstance(release_tag, str) or RELEASE_TAG_RE.fullmatch(release_tag) is None or
+            '..' in release_tag or release_tag.endswith('.') or release_tag.endswith('.lock') or '@{' in release_tag):
+        raise ValueError('release_tag is not a safe GitHub release tag')
+    if not isinstance(agent_sha256, str) or SHA256_RE.fullmatch(agent_sha256) is None:
+        raise ValueError('agent_sha256 must be a lowercase SHA-256 digest')
+    return {'target_platform': target_platform, 'release_tag': release_tag, 'agent_sha256': agent_sha256}
+
+
+def validate_catalog_bundle(catalog):
+    """Validate the optional bundle envelope and its HA target alignment."""
+    bundle = validate_bundle_metadata(catalog.get('target_platform'), catalog.get('release_tag'),
+                                     catalog.get('agent_sha256'))
+    if bundle is None:
+        return
+    plugins = catalog.get('plugins')
+    if not isinstance(plugins, list):
+        raise ValueError('bundle catalog plugins must be a list')
+    homeassistant = [entry for entry in plugins if isinstance(entry, dict) and entry.get('id') == 'homeassistant']
+    if len(homeassistant) != 1 or homeassistant[0].get('image_platform') != bundle['target_platform']:
+        raise ValueError('bundle catalog must contain one Home Assistant entry matching target_platform')
 
 
 def _verifier():
@@ -37,6 +71,8 @@ def check_entry(entry):
             raise ValueError('plugin entry is missing ' + key)
     if not str(entry['image_id']).startswith('sha256:') or len(entry['image_id']) != 71:
         raise ValueError('image_id must be an immutable sha256 image ID')
+    if entry['id'] == 'homeassistant' and re.fullmatch(r'[0-9a-f]{64}', str(entry.get('image_archive_sha256', ''))) is None:
+        raise ValueError('homeassistant.image_archive_sha256 must be a lowercase SHA-256 digest')
     platform = entry['platform']
     binding = platform.get('binding', 'template')
     if binding not in ('template', 'none'):
@@ -75,6 +111,11 @@ def publish(args):
         raise SystemExit('at least one --plugin-file is required')
     now = int(time.time())
     catalog = {'schema': SCHEMA, 'version': args.version, 'published_at': now, 'expires_at': now + args.valid_days * 86400, 'plugins': plugins}
+    bundle = validate_bundle_metadata(getattr(args, 'target_platform', None),
+                                     getattr(args, 'release_tag', None), getattr(args, 'agent_sha256', None))
+    if bundle:
+        catalog.update(bundle)
+        validate_catalog_bundle(catalog)
     raw = json.dumps(catalog, sort_keys=True, indent=1).encode()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -98,6 +139,7 @@ def load_verified(catalog_path, trust_root):
         raise ValueError('catalog has expired')
     for entry in catalog['plugins']:
         check_entry(entry)
+    validate_catalog_bundle(catalog)
     return catalog
 
 
@@ -115,6 +157,10 @@ def main():
     p.add_argument('--version', required=True)
     p.add_argument('--valid-days', type=int, default=30)
     p.add_argument('--plugin-file', action='append', default=[])
+    p.add_argument('--target-platform', choices=sorted(SUPPORTED_PLUGIN_PLATFORMS),
+                   help='optional bundle target; must be paired with --release-tag and --agent-sha256')
+    p.add_argument('--release-tag', help='optional safe GitHub Release tag for the bundle assets')
+    p.add_argument('--agent-sha256', help='optional lowercase SHA-256 digest of the target Agent binary')
     p.set_defaults(run=publish)
     v = sub.add_parser('verify')
     v.add_argument('--trust-root', required=True)

@@ -45,6 +45,21 @@ def private_dir(path, mode=0o700):
     os.chmod(path, mode)
 
 
+def ensure_scope_watcher(stack, agent_dir, *, deferred=False, sleep=time.sleep):
+    """Start the scope watcher, or let an installer start it after releasing its lock."""
+    if deferred:
+        print('Broker scope watcher startup deferred until installer activation releases its lock.')
+        return 'deferred'
+    status = None
+    for _ in range(60):
+        status = scope_sync.ensure(stack, agent_dir)
+        if status != 'busy':
+            break
+        sleep(5)
+    print('Broker scope watcher: %s (log %s)' % (status, Path(agent_dir) / 'scope-sync.log'))
+    return status
+
+
 def up(args):
     agent_dir, stack = Path(args.agent_dir).resolve(), Path(args.stack_dir).resolve()
     project = project_of(stack)
@@ -80,14 +95,9 @@ def up(args):
     else:
         raise RuntimeError('the Agent did not create its socket; see: docker logs ' + name)
     print('Agent %s is up; the platform backend mounts %s as /run/tp-agent' % (name, run))
-    # Devices a user adds in the platform only work once the Broker scope lists them: keep it in step (host process).
-    status = None
-    for _ in range(60):
-        status = scope_sync.ensure(stack, agent_dir)
-        if status != 'busy':
-            break
-        time.sleep(5)
-    print('Broker scope watcher: %s (log %s)' % (status, agent_dir / 'scope-sync.log'))
+    # Installer activation owns the update lock while starting this process;
+    # direct/manual starts retain the existing wait behavior.
+    ensure_scope_watcher(stack, agent_dir, deferred=args.defer_scope_watcher)
 
 
 def down(args):
@@ -104,6 +114,8 @@ def main():
     parser.add_argument('--trust-root')
     parser.add_argument('--agent-image', default=DEFAULT_IMAGE)
     parser.add_argument('--network')
+    parser.add_argument('--defer-scope-watcher', action='store_true',
+                        help='installer owns the update lock and will start the watcher after activation')
     args = parser.parse_args()
     if args.command == 'up' and not all([args.agent_dir, args.agent_bin, args.catalog, args.trust_root]):
         parser.error('up needs --agent-dir, --agent-bin, --catalog and --trust-root')

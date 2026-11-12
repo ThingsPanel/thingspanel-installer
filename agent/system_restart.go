@@ -115,6 +115,52 @@ func (o *Operator) RunExclusive(fn func()) error {
 	return nil
 }
 
+// CodedError is a failure whose reason is a fixed code that may be shown to the user.
+type CodedError struct{ Code string }
+
+func (e CodedError) Error() string { return e.Code }
+
+// StartTask runs a long operation (backup, ...) in the background under the same one-at-a-time rule and the
+// same status.json as restart. fn reports progress; a CodedError becomes the status code.
+func (o *Operator) StartTask(kind string, fn func(ctx context.Context, report func(step string, percent int)) error) (OperationStatus, error) {
+	o.mu.Lock()
+	if o.running {
+		o.mu.Unlock()
+		return OperationStatus{}, ErrBusy
+	}
+	o.running = true
+	o.done = make(chan struct{})
+	st := OperationStatus{ID: o.now().Format("20060102T150405.000Z"), Kind: kind, State: "running", Step: StepPreflight, StartedAt: o.now(), UpdatedAt: o.now()}
+	o.current = st
+	done := o.done
+	o.mu.Unlock()
+	o.publish(st)
+	go func() {
+		defer func() {
+			o.mu.Lock()
+			o.running = false
+			o.mu.Unlock()
+			close(done)
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
+		defer cancel()
+		err := fn(ctx, func(step string, percent int) {
+			o.update(func(s *OperationStatus) { s.Step, s.Percent = step, percent })
+		})
+		if err != nil {
+			code := "failed"
+			var ce CodedError
+			if errors.As(err, &ce) {
+				code = ce.Code
+			}
+			o.update(func(s *OperationStatus) { s.State, s.Code = "failed", code })
+			return
+		}
+		o.update(func(s *OperationStatus) { s.State, s.Step, s.Percent, s.Code = "done", StepDone, 100, "" })
+	}()
+	return st, nil
+}
+
 // StartRestart begins a restart in the background and returns at once. Only one operation runs at a time.
 func (o *Operator) StartRestart(scope string) (OperationStatus, error) {
 	if scope != ScopeControl && scope != ScopeFull {

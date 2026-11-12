@@ -24,7 +24,15 @@ type SystemService struct {
 	version  string
 	operator *Operator // nil: restart is not available
 	scope    *ScopeSyncer
+	backup   *BackupService
+	restore  *RestoreService
 }
+
+// EnableRestore turns on backup restore.
+func (s *SystemService) EnableRestore(r *RestoreService) { s.restore = r }
+
+// EnableBackup turns on backup create/list/verify/delete. Needs operations enabled (one task at a time).
+func (s *SystemService) EnableBackup(b *BackupService) { s.backup = b }
 
 // EnableScopeStatus makes `status` report the last Broker scope synchronisation.
 func (s *SystemService) EnableScopeStatus(sc *ScopeSyncer) { s.scope = sc }
@@ -42,6 +50,7 @@ func NewSystemService(token string, verifier *Verifier, agentVersion string) (*S
 type systemRequest struct {
 	WaitSeconds int64  `json:"wait_seconds"`
 	Scope       string `json:"scope"`
+	Name        string `json:"name"`
 }
 
 type systemResponse struct {
@@ -53,6 +62,8 @@ type systemResponse struct {
 	Result       *VerifyResult    `json:"result,omitempty"`
 	Operation    *OperationStatus `json:"operation,omitempty"`
 	ScopeSync    *ScopeResult     `json:"scope_sync,omitempty"`
+	Backups      []BackupInfo     `json:"backups,omitempty"`
+	Backup       *BackupSummary   `json:"backup,omitempty"`
 }
 
 func (s *SystemService) Handler() http.Handler {
@@ -79,6 +90,57 @@ func (s *SystemService) Handler() http.Handler {
 			return systemResponse{Error: err.Error()}
 		}
 		return systemResponse{OK: true, Role: "system", Operation: &op}
+	}))
+	mux.HandleFunc("/v1/system/backup/create", s.guard(func(ctx context.Context, req systemRequest) systemResponse {
+		if s.backup == nil || s.operator == nil {
+			return systemResponse{Error: "backup is not enabled"}
+		}
+		op, err := s.operator.StartTask("backup", func(ctx context.Context, report func(string, int)) error {
+			_, err := s.backup.Create(ctx, "manual", report)
+			return err
+		})
+		if err != nil {
+			return systemResponse{Error: err.Error()}
+		}
+		return systemResponse{OK: true, Role: "system", Operation: &op}
+	}))
+	mux.HandleFunc("/v1/system/backup/list", s.guard(func(ctx context.Context, req systemRequest) systemResponse {
+		if s.backup == nil {
+			return systemResponse{Error: "backup is not enabled"}
+		}
+		return systemResponse{OK: true, Role: "system", Backups: s.backup.List()}
+	}))
+	mux.HandleFunc("/v1/system/backup/verify", s.guard(func(ctx context.Context, req systemRequest) systemResponse {
+		if s.backup == nil {
+			return systemResponse{Error: "backup is not enabled"}
+		}
+		m, err := s.backup.Verify(req.Name)
+		if err != nil {
+			return systemResponse{Error: err.Error()}
+		}
+		return systemResponse{OK: true, Role: "system", Backup: &BackupSummary{Name: req.Name, PlatformVersion: m.PlatformVersion, Trigger: m.Trigger, Files: len(m.Files), History: m.Includes["history"]}}
+	}))
+	mux.HandleFunc("/v1/system/backup/restore", s.guard(func(ctx context.Context, req systemRequest) systemResponse {
+		if s.restore == nil || s.operator == nil {
+			return systemResponse{Error: "restore is not enabled"}
+		}
+		name := req.Name
+		op, err := s.operator.StartTask("restore", func(ctx context.Context, report func(string, int)) error {
+			return s.restore.Restore(ctx, name, report)
+		})
+		if err != nil {
+			return systemResponse{Error: err.Error()}
+		}
+		return systemResponse{OK: true, Role: "system", Operation: &op}
+	}))
+	mux.HandleFunc("/v1/system/backup/delete", s.guard(func(ctx context.Context, req systemRequest) systemResponse {
+		if s.backup == nil {
+			return systemResponse{Error: "backup is not enabled"}
+		}
+		if err := s.backup.Delete(req.Name); err != nil {
+			return systemResponse{Error: err.Error()}
+		}
+		return systemResponse{OK: true, Role: "system"}
 	}))
 	mux.HandleFunc("/v1/system/verify", s.guard(func(ctx context.Context, req systemRequest) systemResponse {
 		wait := time.Duration(req.WaitSeconds) * time.Second
@@ -133,4 +195,13 @@ func writeSystem(w http.ResponseWriter, status int, body systemResponse) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// BackupSummary is the verify result shown to the caller.
+type BackupSummary struct {
+	Name            string `json:"name"`
+	PlatformVersion string `json:"platform_version"`
+	Trigger         string `json:"trigger"`
+	Files           int    `json:"files"`
+	History         bool   `json:"history"`
 }

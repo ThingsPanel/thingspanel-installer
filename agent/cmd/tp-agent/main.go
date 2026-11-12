@@ -154,6 +154,15 @@ func main() {
 		}
 		operator := &agent.Operator{Config: systemCfg, Manager: inspector, Verifier: verifier}
 		systemService.EnableOperations(operator)
+		if systemCfg.Backup != nil {
+			backupService := &agent.BackupService{
+				Config: *systemCfg.Backup, Project: systemCfg.Project, Version: agentVersion, Runner: inspector,
+				Adapter: &agent.PostgresAdapter{Runner: inspector, Project: systemCfg.Project, Service: systemCfg.Backup.PostgresService, User: systemCfg.Backup.PostgresUser},
+				Plugins: func() (json.RawMessage, error) { return agent.ExportPlugins(store) },
+			}
+			systemService.EnableBackup(backupService)
+			systemService.EnableRestore(&agent.RestoreService{Backup: backupService, Operator: operator, Manager: inspector, Verifier: verifier})
+		}
 		if systemCfg.ScopeSync != nil {
 			syncer := &agent.ScopeSyncer{Config: *systemCfg.ScopeSync, Project: systemCfg.Project, Manager: inspector, Op: operator}
 			systemService.EnableScopeStatus(syncer)

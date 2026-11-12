@@ -32,11 +32,20 @@ func main() {
 	endpoint, args := flag.Arg(0), flag.Args()[1:]
 	system := false
 	if endpoint == "system" {
-		if flag.NArg() < 2 || (flag.Arg(1) != "status" && flag.Arg(1) != "verify" && flag.Arg(1) != "restart") {
-			fmt.Fprintln(os.Stderr, "usage: tp-agentctl -socket SYS -token-file F system status|verify|restart [wait_seconds=N] [scope=control|full]")
+		sub := flag.Arg(1)
+		if sub == "backup" && flag.NArg() >= 3 {
+			sub = "backup/" + flag.Arg(2)
+		}
+		valid := map[string]bool{"status": true, "verify": true, "restart": true, "backup/create": true, "backup/list": true, "backup/verify": true, "backup/delete": true, "backup/restore": true}
+		if flag.NArg() < 2 || !valid[sub] {
+			fmt.Fprintln(os.Stderr, "usage: tp-agentctl -socket SYS -token-file F system status|verify|restart [wait_seconds=N] [scope=control|full] | system backup create|list|verify|restore|delete [name=...]")
 			os.Exit(2)
 		}
-		endpoint, args, system = "/v1/system/"+flag.Arg(1), flag.Args()[2:], true
+		skip := 2
+		if strings.HasPrefix(sub, "backup/") {
+			skip = 3
+		}
+		endpoint, args, system = "/v1/system/"+sub, flag.Args()[skip:], true
 	}
 	raw, err := os.ReadFile(*tokenFile)
 	if err != nil {
@@ -73,7 +82,7 @@ func main() {
 	if response.StatusCode != http.StatusOK {
 		os.Exit(1)
 	}
-	if system && endpoint == "/v1/system/restart" {
+	if system && (endpoint == "/v1/system/restart" || endpoint == "/v1/system/backup/create" || strings.HasPrefix(endpoint, "/v1/system/backup/")) {
 		return // accepted; poll `system status` for progress
 	}
 	if system {

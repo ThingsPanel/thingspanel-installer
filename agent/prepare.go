@@ -45,6 +45,10 @@ type PreparationProfile struct {
 	// NetworkAlias is a stable DNS alias on Network (e.g. tp-plugin-homeassistant), so the address the
 	// platform registers survives container replacement across generations. Requires Network.
 	NetworkAlias string `json:"network_alias,omitempty"`
+	// Mounts and Tmpfs come only from the signed catalog entry (see storage.go). Both are part of the profile
+	// digest, so a changed storage declaration is a different profile.
+	Mounts []PreparationMount `json:"mounts,omitempty"`
+	Tmpfs  []PreparationTmpfs `json:"tmpfs,omitempty"`
 }
 
 type PrepareContainerRequest struct {
@@ -207,7 +211,7 @@ func validPreparationProfile(p PreparationProfile) bool {
 	if p.Network != "" && !validPreparationNetwork(p.Network) {
 		return false
 	}
-	if len(p.Env) > 64 {
+	if len(p.Env) > 64 || !validMounts(p.Mounts, p.Tmpfs) {
 		return false
 	}
 	seen := map[string]bool{}
@@ -526,7 +530,7 @@ func safePreparedContainer(container dockerContainer, record containerPreparatio
 	if limits.NetworkMode != preparedNetwork(record.Profile) || !limits.ReadonlyRootfs || limits.Privileged || limits.AutoRemove || limits.PublishAllPorts || !equalStrings(limits.CapDrop, []string{"ALL"}) || len(limits.CapAdd) != 0 || !equalStrings(limits.SecurityOpt, []string{"no-new-privileges:true"}) || limits.RestartPolicy.Name != "no" || limits.RestartPolicy.MaximumRetryCount != 0 || limits.IpcMode != "none" || limits.PidMode != "" || limits.UTSMode != "" || limits.UsernsMode != "" || limits.CgroupnsMode != "private" || limits.Memory != preparationMemory || limits.NanoCPUs != preparationNanoCPUs || limits.PidsLimit != preparationPids || limits.LogConfig.Type != "none" {
 		return false
 	}
-	if len(limits.Binds) != 0 || len(limits.Mounts) != 0 || len(limits.Devices) != 0 || len(limits.DeviceRequests) != 0 || len(limits.DeviceCgroupRules) != 0 || len(limits.VolumesFrom) != 0 || len(limits.PortBindings) != 0 || len(limits.Links) != 0 || len(limits.ExtraHosts) != 0 || len(limits.GroupAdd) != 0 || len(limits.Tmpfs) != 0 || len(limits.Sysctls) != 0 || len(container.Mounts) != 0 || len(container.NetworkSettings.Ports) != 0 {
+	if len(limits.Devices) != 0 || len(limits.DeviceRequests) != 0 || len(limits.DeviceCgroupRules) != 0 || len(limits.VolumesFrom) != 0 || len(limits.PortBindings) != 0 || len(limits.Links) != 0 || len(limits.ExtraHosts) != 0 || len(limits.GroupAdd) != 0 || len(limits.Sysctls) != 0 || len(container.NetworkSettings.Ports) != 0 || !safeStorage(container, record, host) {
 		return false
 	}
 	for network, endpoint := range container.NetworkSettings.Networks {

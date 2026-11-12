@@ -198,8 +198,8 @@ func TestConfigEndpointsOnlyAcceptDeclaredSecrets(t *testing.T) {
 	s := &Service{catalog: source, builder: builder}
 	ctx := context.Background()
 	for _, bad := range []apiRequest{
-		{Instance: "homeassistant", Key: "HA_BASE_URL", Value: "x"},    // declared but not secret
-		{Instance: "homeassistant", Key: "PATH", Value: "x"},           // undeclared
+		{Instance: "homeassistant", Key: "HA_BASE_URL", Value: "x"},      // declared but not secret
+		{Instance: "homeassistant", Key: "PATH", Value: "x"},             // undeclared
 		{Instance: "unknown-plugin", Key: "HA_ACCESS_TOKEN", Value: "x"}, // not in the catalog
 		{Instance: "homeassistant", Key: "HA_ACCESS_TOKEN", Value: "a\nb"},
 		{Instance: "homeassistant", Key: "HA_ACCESS_TOKEN", Value: ""},

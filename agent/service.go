@@ -60,13 +60,13 @@ type apiRequest struct {
 }
 
 type apiResponse struct {
-	OK          bool              `json:"ok"`
-	Error       string            `json:"error,omitempty"`
+	OK          bool                    `json:"ok"`
+	Error       string                  `json:"error,omitempty"`
 	Preparation *PreparationObservation `json:"preparation,omitempty"`
-	Activation  *ActivationRecord `json:"activation,omitempty"`
-	Stopped     []string          `json:"stopped,omitempty"`
-	Catalog     []PublicEntry     `json:"catalog,omitempty"`
-	Keys        []string          `json:"keys,omitempty"`
+	Activation  *ActivationRecord       `json:"activation,omitempty"`
+	Stopped     []string                `json:"stopped,omitempty"`
+	Catalog     []PublicEntry           `json:"catalog,omitempty"`
+	Keys        []string                `json:"keys,omitempty"`
 }
 
 func (s *Service) Handler() http.Handler {
@@ -226,7 +226,11 @@ func (s *Service) declaredSecret(instance, key string) error {
 	if s.catalog == nil || s.builder.Secrets == nil {
 		return ErrPreparationPolicy
 	}
-	entry, err := s.catalog.Entry(instance)
+	catalogID, installID := SplitInstance(instance)
+	if installID != "" && !validInstallID(installID) {
+		return ErrPreparationPolicy
+	}
+	entry, err := s.catalog.Entry(catalogID)
 	if err != nil {
 		return ErrPreparationPolicy
 	}

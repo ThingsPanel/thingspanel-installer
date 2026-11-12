@@ -65,6 +65,47 @@ def _verifier():
     return module
 
 
+_RESERVED_MOUNTS = ('/proc', '/sys', '/dev', '/etc', '/run', '/var/run', '/bin', '/sbin', '/lib', '/lib64', '/usr', '/boot')
+
+
+def _check_destination(value, what):
+    """Same rules as the Agent (agent/storage.go validDestination); the Agent re-checks and fails closed."""
+    import posixpath
+    if (not isinstance(value, str) or not value.startswith('/') or value == '/' or len(value) > 255 or posixpath.normpath(value) != value
+            or any(c in value for c in ',:\\\0\r\n')):
+        raise ValueError('%s: destination must be a clean absolute path' % what)
+    if any(value == p or value.startswith(p + '/') for p in _RESERVED_MOUNTS):
+        raise ValueError('%s: destination %s is reserved' % (what, value))
+    return value
+
+
+def check_storage(entry):
+    """Optional generic storage: named volumes (rw/ro) and bounded tmpfs. No bind sources, drivers or options."""
+    volumes, tmpfs = entry.get('volumes', []), entry.get('tmpfs', [])
+    if not isinstance(volumes, list) or not isinstance(tmpfs, list) or len(volumes) > 4 or len(tmpfs) > 2:
+        raise ValueError('volumes (max 4) and tmpfs (max 2) must be lists')
+    keys, dests = set(), []
+    for v in volumes:
+        if not isinstance(v, dict) or set(v) - {'key', 'destination', 'mode'}:
+            raise ValueError('volumes[]: only key, destination and mode are allowed')
+        if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,30}[a-z0-9]', str(v.get('key', ''))) or v['key'] in keys:
+            raise ValueError('volumes[].key must be a unique lowercase label')
+        if v.get('mode') not in ('rw', 'ro'):
+            raise ValueError('volumes[].mode must be rw or ro')
+        keys.add(v['key'])
+        dests.append(_check_destination(v.get('destination'), 'volumes[%s]' % v['key']))
+    for t in tmpfs:
+        if not isinstance(t, dict) or set(t) - {'destination', 'size_mib'}:
+            raise ValueError('tmpfs[]: only destination and size_mib are allowed')
+        if not isinstance(t.get('size_mib'), int) or isinstance(t.get('size_mib'), bool) or not 1 <= t['size_mib'] <= 256:
+            raise ValueError('tmpfs[].size_mib must be 1..256')
+        dests.append(_check_destination(t.get('destination'), 'tmpfs'))
+    for i, a in enumerate(dests):
+        for b in dests[i + 1:]:
+            if a == b or a.startswith(b + '/') or b.startswith(a + '/'):
+                raise ValueError('storage destinations must not overlap: %s, %s' % (a, b))
+
+
 def check_entry(entry):
     for key in ('id', 'version', 'kind', 'image_id', 'entrypoint', 'platform'):
         if key not in entry:
@@ -97,6 +138,7 @@ def check_entry(entry):
     for name, spec in entry.get('env_user', {}).items():
         if not isinstance(spec, dict) or spec.get('validate') not in (None, 'url'):
             raise ValueError('env_user.%s: unsupported spec' % name)
+    check_storage(entry)
     if entry['kind'] != 'service':
         raise ValueError('only service plugins are supported by this installer')
 

@@ -16,11 +16,20 @@
 这个用例抓到一个真实偏差：Docker 在 `ReadOnly=false` 时会省略该键，我最初“恰好 4 个键”的检查误拒合法容器，已改为只允许 Type/Source/Target/ReadOnly。真实回读形状：`Mounts[].Driver=local, Mode=z, RW=true`；`HostConfig.Mounts=[{Type,Source,Target}]`；`Tmpfs={"/tmp":"rw,noexec,nosuid,nodev,size=16m"}`；`Config.Volumes=null`。
 
 ## 没做 / 未验证
-- 真实 Docker 只覆盖到 create-only 的回读；`ro` 卷、多卷、容器真正启动后卷内数据持久（重启/换代后 Fabric 恢复）没有在真实 Docker 里验证。已有的 3 个真实 Docker *启动* 用例（`activate_real_test.go`）需要可运行镜像；用我这个不可执行的测试镜像会 start 400，不是代码回归，未用可运行镜像重跑。
+- 真实 Docker 只覆盖到 create-only 的回读；`ro` 卷、多卷、容器真正启动后卷内数据持久（重启/换代后 Fabric 恢复）没有在真实 Docker 里验证。
 - 卷属主：Agent 固定 `65534:65534` 运行，首次挂载依赖镜像里目标目录已按该 UID 建好（Docker 会拷贝属主）；Matter 镜像需满足，或另行约定。
 - 控制面如何生成并传递租户安装 ID（后端/安装、升级、授权、密钥、卸载流程）**未改**，这里只定了 Agent 侧约定。
 - 卸载保留数据已是默认（Agent 无删卷接口）；**显式 purge 操作未实现**。
 - 网络别名仍按 catalog ID 固定（`tp-plugin-<id>`），同一插件多租户同时运行会别名冲突，需另议。
-- 发布/校验工具（Python publisher、`sign_catalog.sh`）尚未支持新字段。
-- 双写拒绝依赖现有的单实例资源占用与 revoke→stop→才 start 的流程，未新增专门的卷级测试；未知 stop 结果 fail closed 沿用现有 `ErrActivationUnresolved`。
 - C（网络/mDNS）、D（实体设备）、A（前端 UI）均未涉及。
+
+## 补充（同日，真实启动层）
+- `TestActivationVolumeSurvivesTakeoverAndIsPerTenantRealDocker`（真实 Docker，真实 start）：租户 A 第 1 代写入卷 → 第 2 代未退役前 Prepare 被拒（`ErrResourceConflict`，单写者）→ Sweep+Retire 后第 2 代启动，卷内日志为 `n=0,n=1`（数据跨代保留）→ 租户 B 得到独立空卷 `n=0`。用的是本地 `docker import` 的惰性 stub 镜像（含 `/pluginstub`，写 `/data/log`），不是 Matter 镜像。整个 agent 包（含全部真实 Docker 启动用例）`-race` 通过，测试后无遗留容器/卷。
+- 发布工具：`tools/plugin_catalog.py` 新增 `check_storage`（与 Agent 同规则：禁止 bind 源/驱动/选项、保留路径、嵌套、tmpfs 1–256 MiB）与 `tools/test_plugin_catalog_storage.py`。`test_plugin_bundle`/`test_plugin_install` 有 4 个失败 2 个错误，**基线 `dea71d8` 上相同**，与本次无关。
+- 单写者与"未知 stop 结果 fail closed"沿用现有 Activator 机制，真实 Docker 里验证了前者。
+
+## 重要发现：Agent 目前托管不了 Matter 镜像（不止缺卷）
+`docker_prepare.go` 对所有预备容器固定：用户 `65534:65534`、只读根文件系统、内存 64 MiB、PID 上限 16、`CapDrop ALL`。Matter 镜像需要 D-Bus + Avahi + Python Controller，以 UID 10001 运行，且需要局域网 IPv6/mDNS 组播。因此：卷能力是必要但不充分条件；还需要可声明的资源上限、运行用户（或镜像适配 65534）、以及受审的 LAN 网络能力（C 项）。这些**未做**。
+- 控制面传租户安装 ID：安装器 `tools/plugin_install.py` 仍以 `entry['id']` 作 instance；平台运行时身份 API 的 `plugin_instance` 是否接受 `<id>.<installID>` 未验证（改平台源码超出范围）。
+- purge（显式删卷）未实现。
+- 网络别名仍按 catalog ID 固定。

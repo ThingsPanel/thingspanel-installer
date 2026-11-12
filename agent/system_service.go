@@ -25,7 +25,11 @@ type SystemService struct {
 	operator *Operator // nil: restart is not available
 	scope    *ScopeSyncer
 	backup   *BackupService
+	restore  *RestoreService
 }
+
+// EnableRestore turns on backup restore.
+func (s *SystemService) EnableRestore(r *RestoreService) { s.restore = r }
 
 // EnableBackup turns on backup create/list/verify/delete. Needs operations enabled (one task at a time).
 func (s *SystemService) EnableBackup(b *BackupService) { s.backup = b }
@@ -115,6 +119,19 @@ func (s *SystemService) Handler() http.Handler {
 			return systemResponse{Error: err.Error()}
 		}
 		return systemResponse{OK: true, Role: "system", Backup: &BackupSummary{Name: req.Name, PlatformVersion: m.PlatformVersion, Trigger: m.Trigger, Files: len(m.Files), History: m.Includes["history"]}}
+	}))
+	mux.HandleFunc("/v1/system/backup/restore", s.guard(func(ctx context.Context, req systemRequest) systemResponse {
+		if s.restore == nil || s.operator == nil {
+			return systemResponse{Error: "restore is not enabled"}
+		}
+		name := req.Name
+		op, err := s.operator.StartTask("restore", func(ctx context.Context, report func(string, int)) error {
+			return s.restore.Restore(ctx, name, report)
+		})
+		if err != nil {
+			return systemResponse{Error: err.Error()}
+		}
+		return systemResponse{OK: true, Role: "system", Operation: &op}
 	}))
 	mux.HandleFunc("/v1/system/backup/delete", s.guard(func(ctx context.Context, req systemRequest) systemResponse {
 		if s.backup == nil {

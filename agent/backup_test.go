@@ -17,16 +17,35 @@ import (
 )
 
 type fakeRunner struct {
-	failDump string
-	dumps    []string
-	noFiles  bool
+	log           []string
+	failRestore   int // number of upcoming pg_restore runs that fail
+	failRestoreAt string
+	failDump      string
+	dumps         []string
+	noFiles       bool
+	copied        []int
 }
 
 func (f *fakeRunner) ExecStream(_ context.Context, _, _ string, argv []string, w io.Writer) (int, string, error) {
+	f.log = append(f.log, strings.Join(argv, " "))
 	switch argv[0] {
+	case "pg_restore":
+		if len(argv) > 1 && argv[1] == "-l" {
+			io.WriteString(w, "; Archive created\n123; 1262 0 EXTENSION - timescaledb\n")
+			return 0, "", nil
+		}
+		if f.failRestore > 0 {
+			f.failRestore--
+			return 1, "restore error", nil
+		}
+		return 0, "", nil
+	case "rm":
+		return 0, "", nil
 	case "psql":
 		sql := argv[len(argv)-1]
 		switch {
+		case strings.Contains(sql, "template1"):
+			io.WriteString(w, "UTF8|C|C\n")
 		case strings.Contains(sql, "datname from pg_database"):
 			io.WriteString(w, "ThingsPanel\ndevice_metadata\n")
 		case strings.Contains(sql, "server_version"):
@@ -51,6 +70,12 @@ func (f *fakeRunner) ExecStream(_ context.Context, _, _ string, argv []string, w
 		io.WriteString(w, "v1.4.0\n")
 	}
 	return 0, "", nil
+}
+
+func (f *fakeRunner) CopyTo(_ context.Context, _, _, _ string, r io.Reader) error {
+	f.copied = append(f.copied, 1)
+	_, err := io.Copy(io.Discard, r)
+	return err
 }
 
 func (f *fakeRunner) CopyFrom(_ context.Context, _, _, _ string, w io.Writer) error {

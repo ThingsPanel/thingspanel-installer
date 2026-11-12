@@ -120,3 +120,28 @@ func (d *DockerStackInspector) CopyFrom(ctx context.Context, project, service, p
 	_, err = io.Copy(w, resp.Body)
 	return err
 }
+
+// CopyTo extracts a tar stream into dir inside a container. Used to place dump files in the PostgreSQL
+// container and to restore the uploaded files; the destination is always a fixed path from the system config.
+func (d *DockerStackInspector) CopyTo(ctx context.Context, project, service, dir string, r io.Reader) error {
+	id, err := d.containerID(ctx, project, service)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://docker"+dockerPreparationAPI+"/containers/"+url.PathEscape(id)+"/archive?path="+url.QueryEscape(dir), r)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-tar")
+	client := *d.client
+	client.Timeout = 0
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("docker answered %d", resp.StatusCode)
+	}
+	return nil
+}

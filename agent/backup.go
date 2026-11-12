@@ -114,6 +114,8 @@ type BackupAdapter interface {
 type StreamRunner interface {
 	ExecStream(ctx context.Context, project, service string, argv []string, stdout io.Writer) (int, string, error)
 	CopyFrom(ctx context.Context, project, service, path string, w io.Writer) error
+	// CopyTo extracts the tar stream r into dir inside the container (it may be stopped), like `docker cp - c:dir`.
+	CopyTo(ctx context.Context, project, service, dir string, r io.Reader) error
 }
 
 // PostgresAdapter dumps with pg_dump inside the PostgreSQL container, so the client version always matches
@@ -300,6 +302,19 @@ func (s *BackupService) CleanPartials() {
 
 // Create writes a full backup. report is optional progress.
 func (s *BackupService) Create(ctx context.Context, trigger string, report func(step string, percent int)) (string, error) {
+	return s.CreateWith(ctx, CreateOptions{Trigger: trigger}, report)
+}
+
+// CreateOptions varies a backup. Version, when set, replaces the lookup in the backend container (which is
+// stopped while a restore or upgrade takes its safety snapshot).
+type CreateOptions struct {
+	Trigger string
+	Version string
+}
+
+// CreateWith is Create with options.
+func (s *BackupService) CreateWith(ctx context.Context, opts CreateOptions, report func(step string, percent int)) (string, error) {
+	trigger := opts.Trigger
 	if report == nil {
 		report = func(string, int) {}
 	}
@@ -324,7 +339,10 @@ func (s *BackupService) Create(ctx context.Context, trigger string, report func(
 	if avail, err := free(s.Config.Dir); err != nil || int64(avail) < 2*estimate+64<<20 {
 		return "", CodedError{CodeBackupSpace}
 	}
-	version := s.platformVersion(ctx)
+	version := opts.Version
+	if version == "" {
+		version = s.platformVersion(ctx)
+	}
 	created := s.now()
 	base := fmt.Sprintf("tp-backup-%s-%s-full", created.Format("20060102T150405Z"), version)
 	name := base + ".tar"

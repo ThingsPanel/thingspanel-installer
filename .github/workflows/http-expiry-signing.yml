@@ -1,0 +1,77 @@
+name: Sign fixed HTTP 1.2.1 expiry candidate
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sign-candidate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    env:
+      SOURCE_COMMIT: 247579be25b7125dd2f9a5c7b4f975e56ccdb695
+      TOOLKIT_COMMIT: 3f5ac1ec4034a6879867be56e54c7c9d1798aa14
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: 3f5ac1ec4034a6879867be56e54c7c9d1798aa14
+          path: toolkit
+      - uses: actions/checkout@v4
+        with:
+          repository: ThingsPanel/thingspanel-adapter-http
+          ref: 247579be25b7125dd2f9a5c7b4f975e56ccdb695
+          path: http-source
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.9'
+      - name: Verify fixed sources and lifecycle tests
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C toolkit rev-parse HEAD)" = "$TOOLKIT_COMMIT"
+          test "$(git -C http-source rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test -z "$(git -C http-source status --porcelain)"
+          python3 -m unittest discover -s tools -p 'test_http_expiry_catalog.py'
+          (cd http-source && go test ./internal/downlink ./internal/protocol ./internal/platform -count=1)
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build fixed HTTP image
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          docker buildx build --platform "linux/$ARCH" --provenance=false --load -f http-source/Dockerfile.managed -t "thingspanel/http-managed:1.2.1-$ARCH" http-source
+          docker inspect "thingspanel/http-managed:1.2.1-$ARCH" > "$RUNNER_TEMP/image.json"
+          docker save -o "out/http-image-linux-$ARCH.tar" "thingspanel/http-managed:1.2.1-$ARCH"
+      - name: Preserve signed Agent and HA assets
+        run: |
+          set -euo pipefail
+          base="https://github.com/ThingsPanel/thingspanel-installer/releases/download/plugin-http-v1.2.0"
+          curl -fsSL --retry 3 "$base/catalog-linux-$ARCH.json" -o "$RUNNER_TEMP/base.json"
+          curl -fsSL --retry 3 "$base/catalog-linux-$ARCH.json.sig" -o "$RUNNER_TEMP/base.json.sig"
+          python3 toolkit/tools/plugin_catalog.py verify --trust-root toolkit/config/native/plugin_catalog_trust.pem --catalog "$RUNNER_TEMP/base.json"
+          for file in "tp-agent-linux-$ARCH" "ha-image-linux-$ARCH.tar"; do
+            curl -fsSL --retry 3 "$base/$file" -o "out/$file"
+          done
+          python3 tools/build_http_expiry_catalog.py
+      - name: Sign and verify candidate using existing trust root
+        env:
+          SIGNING_KEY: ${{ secrets.TP_PLUGIN_CATALOG_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$RUNNER_TEMP/http-expiry-signing-key.pem"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          openssl dgst -sha256 -sign "$key" -out "out/catalog-linux-$ARCH.json.sig" "out/catalog-linux-$ARCH.json"
+          python3 toolkit/tools/plugin_catalog.py verify --trust-root toolkit/config/native/plugin_catalog_trust.pem --catalog "out/catalog-linux-$ARCH.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: http-expiry-signed-linux-${{ matrix.arch }}
+          path: out/*
+          retention-days: 14

@@ -95,6 +95,27 @@ type HelperSpec struct {
 // HelperRunner runs a one-shot container to completion and returns its exit code and the tail of its output.
 type HelperRunner interface {
 	RunHelper(ctx context.Context, spec HelperSpec) (int, string, error)
+	// KillHelpers force-removes helper containers left behind by an Agent that died while one was running.
+	KillHelpers(ctx context.Context) error
+}
+
+// KillHelpers removes every container labelled as an Agent helper, running or not.
+func (d *DockerStackInspector) KillHelpers(ctx context.Context) error {
+	filters, _ := json.Marshal(map[string][]string{"label": {"io.thingspanel.agent.helper=1"}})
+	var listed []struct {
+		ID string `json:"Id"`
+	}
+	if err := d.get(ctx, "/containers/json?all=1&filters="+url.QueryEscape(string(filters)), &listed); err != nil {
+		return err
+	}
+	for _, c := range listed {
+		r, err := d.engine(ctx, http.MethodDelete, "/containers/"+c.ID+"?force=true", nil, false)
+		if err != nil {
+			return err
+		}
+		r.Body.Close()
+	}
+	return nil
 }
 
 func (d *DockerStackInspector) engine(ctx context.Context, method, path string, body any, long bool) (*http.Response, error) {

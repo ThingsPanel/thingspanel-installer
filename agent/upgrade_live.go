@@ -220,6 +220,8 @@ func (l *LiveUpgrade) RestoreSnapshot(ctx context.Context, name string) error {
 	return l.Restore.restoreContents(ctx, project, name, m, nil)
 }
 
+func (l *LiveUpgrade) AbortHelpers(ctx context.Context) error { return l.Helper.KillHelpers(ctx) }
+
 func (l *LiveUpgrade) Verify(ctx context.Context) error {
 	if res := l.Verifier.Wait(ctx, l.budget()); !res.OK {
 		return errors.New("health gate failed")

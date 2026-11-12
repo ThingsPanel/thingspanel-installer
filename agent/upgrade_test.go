@@ -124,6 +124,10 @@ func (f fakeSteps) ComposeUp(context.Context) error {
 	}
 	return nil
 }
+func (f fakeSteps) AbortHelpers(context.Context) error {
+	f.w.calls = append(f.w.calls, "abort-helpers")
+	return nil
+}
 func (f fakeSteps) Verify(context.Context) error {
 	f.w.calls = append(f.w.calls, "verify")
 	if f.w.runningCfg == "new" && f.w.fail["verify"] {

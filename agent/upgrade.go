@@ -115,6 +115,8 @@ type UpgradeSteps interface {
 	RestoreSnapshot(ctx context.Context, name string) error
 	ComposeUp(ctx context.Context) error
 	Verify(ctx context.Context) error
+	// AbortHelpers removes helper containers a dead Agent left running (a half-finished `compose up`).
+	AbortHelpers(ctx context.Context) error
 }
 
 // Upgrader runs upgrades and resumes interrupted ones.
@@ -341,7 +343,10 @@ func (u *Upgrader) rollback(ctx context.Context, s *UpgradeState, cause string, 
 		return CodedError{CodeUpgradeNeedsHuman}
 	}
 	report(StepUpgradeRollingBack, 85)
-	err := u.Steps.StopControl(ctx)
+	err := u.Steps.AbortHelpers(ctx)
+	if err == nil {
+		err = u.Steps.StopControl(ctx)
+	}
 	if err == nil {
 		err = u.Steps.RevertConfig(ctx, s.Operation)
 	}
@@ -381,6 +386,7 @@ func (u *Upgrader) Resume(ctx context.Context, report func(step string, percent 
 		return nil
 	}
 	u.logf("upgrade: resuming interrupted upgrade at phase %s", s.Phase)
+	_ = u.Steps.AbortHelpers(ctx)
 	switch s.Phase {
 	case UpPreflight, UpStaging, UpSnapshotDone, UpStopping:
 		_ = u.Steps.RecoverConfig(ctx)

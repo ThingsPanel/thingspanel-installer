@@ -1,0 +1,170 @@
+{
+  "env": {
+    "TP_MQTT_USER": "platform",
+    "TP_MQTT_PASSWORD": "pw1",
+    "TP_BROKER_CELL": "cell",
+    "TP_BROKER_INSTANCE": "inst",
+    "TP_MQTT_CLIENT_ID": "cid",
+    "TP_PROTOCOL_MQTT_USER": "proto",
+    "TP_PROTOCOL_MQTT_PASSWORD": "pw2"
+  },
+  "targets": [
+    {
+      "id": "d1",
+      "tenant_id": "t2"
+    },
+    {
+      "id": "d2",
+      "tenant_id": "t1"
+    }
+  ],
+  "plugins": [
+    {
+      "id": "p1",
+      "tenant_id": "t3"
+    },
+    {
+      "id": "d2",
+      "tenant_id": "t1"
+    }
+  ],
+  "empty": [
+    {
+      "username": "platform",
+      "password": "pw1",
+      "broker_cell": "cell",
+      "broker_instance": "inst",
+      "allowed_client_ids": [
+        "cid",
+        "tp-community-readiness"
+      ],
+      "allowed_device_ids": [],
+      "allowed_tenant_ids": [],
+      "principal": {
+        "tenant_id": "platform",
+        "device_id": "community-backend",
+        "principal_kind": "service"
+      },
+      "policy": {
+        "publish": [],
+        "subscribe": [
+          "tp-internal/ingress/v1/#",
+          "tp-internal/state/v1/#"
+        ],
+        "max_payload": 1048576,
+        "max_qos": 1,
+        "retain_profile": "live-ingress"
+      },
+      "policy_version": "installer-v1",
+      "mapping_version": "standard-v1"
+    },
+    {
+      "username": "proto",
+      "password": "pw2",
+      "broker_cell": "cell",
+      "broker_instance": "inst",
+      "allowed_client_ids": [],
+      "allowed_device_ids": [],
+      "allowed_tenant_ids": [],
+      "principal": {
+        "tenant_id": "platform",
+        "device_id": "community-protocols",
+        "principal_kind": "service"
+      },
+      "policy": {
+        "publish": [],
+        "subscribe": [],
+        "max_payload": 1048576,
+        "max_qos": 1,
+        "retain_profile": "live-ingress"
+      },
+      "policy_version": "installer-v1",
+      "mapping_version": "standard-v1",
+      "allow_any_client_id": true,
+      "plugin_socket": true
+    }
+  ],
+  "full": [
+    {
+      "username": "platform",
+      "password": "pw1",
+      "broker_cell": "cell",
+      "broker_instance": "inst",
+      "allowed_client_ids": [
+        "cid",
+        "tp-community-readiness"
+      ],
+      "allowed_device_ids": [
+        "d1",
+        "d2",
+        "p1"
+      ],
+      "allowed_tenant_ids": [
+        "t1",
+        "t2",
+        "t3"
+      ],
+      "principal": {
+        "tenant_id": "platform",
+        "device_id": "community-backend",
+        "principal_kind": "service"
+      },
+      "policy": {
+        "publish": [
+          "devices/command/+/+",
+          "gateway/command/+/+",
+          "devices/telemetry/control/+",
+          "gateway/telemetry/control/+",
+          "devices/attributes/get/+",
+          "gateway/attributes/get/+",
+          "devices/attributes/set/+/+",
+          "gateway/attributes/set/+/+",
+          "devices/attributes/response/+/+",
+          "gateway/attributes/response/+/+",
+          "devices/event/response/+/+",
+          "gateway/event/response/+/+"
+        ],
+        "subscribe": [
+          "tp-internal/ingress/v1/#",
+          "tp-internal/state/v1/#"
+        ],
+        "max_payload": 1048576,
+        "max_qos": 1,
+        "retain_profile": "live-ingress"
+      },
+      "policy_version": "installer-v1",
+      "mapping_version": "standard-v1"
+    },
+    {
+      "username": "proto",
+      "password": "pw2",
+      "broker_cell": "cell",
+      "broker_instance": "inst",
+      "allowed_client_ids": [],
+      "allowed_device_ids": [
+        "p1",
+        "d2"
+      ],
+      "allowed_tenant_ids": [
+        "t1",
+        "t3"
+      ],
+      "principal": {
+        "tenant_id": "platform",
+        "device_id": "community-protocols",
+        "principal_kind": "service"
+      },
+      "policy": {
+        "publish": [],
+        "subscribe": [],
+        "max_payload": 1048576,
+        "max_qos": 1,
+        "retain_profile": "live-ingress"
+      },
+      "policy_version": "installer-v1",
+      "mapping_version": "standard-v1",
+      "allow_any_client_id": true,
+      "plugin_socket": true
+    }
+  ]
+}

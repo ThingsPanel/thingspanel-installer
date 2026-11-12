@@ -97,6 +97,24 @@ func (o *Operator) Wait() {
 	}
 }
 
+// RunExclusive runs fn only if no system operation is running, and blocks new ones meanwhile.
+func (o *Operator) RunExclusive(fn func()) error {
+	o.mu.Lock()
+	if o.running {
+		o.mu.Unlock()
+		return ErrBusy
+	}
+	o.running = true
+	o.mu.Unlock()
+	defer func() {
+		o.mu.Lock()
+		o.running = false
+		o.mu.Unlock()
+	}()
+	fn()
+	return nil
+}
+
 // StartRestart begins a restart in the background and returns at once. Only one operation runs at a time.
 func (o *Operator) StartRestart(scope string) (OperationStatus, error) {
 	if scope != ScopeControl && scope != ScopeFull {

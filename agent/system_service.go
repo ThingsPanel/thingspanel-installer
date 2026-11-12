@@ -23,7 +23,11 @@ type SystemService struct {
 	verifier *Verifier
 	version  string
 	operator *Operator // nil: restart is not available
+	scope    *ScopeSyncer
 }
+
+// EnableScopeStatus makes `status` report the last Broker scope synchronisation.
+func (s *SystemService) EnableScopeStatus(sc *ScopeSyncer) { s.scope = sc }
 
 // EnableOperations turns on the actions that change the stack (restart).
 func (s *SystemService) EnableOperations(op *Operator) { s.operator = op }
@@ -48,6 +52,7 @@ type systemResponse struct {
 	Project      string           `json:"project,omitempty"`
 	Result       *VerifyResult    `json:"result,omitempty"`
 	Operation    *OperationStatus `json:"operation,omitempty"`
+	ScopeSync    *ScopeResult     `json:"scope_sync,omitempty"`
 }
 
 func (s *SystemService) Handler() http.Handler {
@@ -58,6 +63,10 @@ func (s *SystemService) Handler() http.Handler {
 		if s.operator != nil {
 			op := s.operator.Status()
 			resp.Operation = &op
+		}
+		if s.scope != nil {
+			last := s.scope.Last()
+			resp.ScopeSync = &last
 		}
 		return resp
 	}))

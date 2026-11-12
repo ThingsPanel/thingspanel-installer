@@ -82,6 +82,17 @@ func restoreFixture(t *testing.T) restoreFixtureT {
 	return restoreFixtureT{svc, runner, mgr, root, name}
 }
 
+// nothing (a dead host) is running: the restore still starts PostgreSQL and Redis before anything else.
+func TestRestoreStartsDataServicesFirst(t *testing.T) {
+	f := restoreFixture(t)
+	if err := f.svc.Restore(context.Background(), f.backup, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.mgr.calls) < 1 || f.mgr.calls[0] != "start:postgres" {
+		t.Fatalf("first calls: %v", f.mgr.calls)
+	}
+}
+
 func (f restoreFixtureT) flagOn() bool {
 	_, err := os.Stat(filepath.Join(f.svc.Operator.Config.StatusDir, "active"))
 	return err == nil
@@ -102,6 +113,9 @@ func TestRestoreHappyPathOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := strings.Join(f.mgr.calls, " ")
+	if !strings.Contains(calls, "start:postgres") || strings.Index(calls, "start:postgres") > strings.Index(calls, "stop:") {
+		t.Fatalf("data services must be started first:\n%s", calls)
+	}
 	wantStop := "stop:automation-scheduler stop:encore-api stop:backend stop:mosquitto stop:broker-owner"
 	if !strings.Contains(calls, wantStop) {
 		t.Fatalf("stop order:\n%s", calls)
@@ -161,8 +175,13 @@ func TestRestoreRefusalsTouchNothing(t *testing.T) {
 	if !errors.As(err, &ce) || ce.Code != CodeRestoreVerify {
 		t.Fatalf("err=%v", err)
 	}
-	if len(f.mgr.calls) != 0 || f.flagOn() {
-		t.Fatalf("a refused restore touched the stack: %v flag=%v", f.mgr.calls, f.flagOn())
+	for _, c := range f.mgr.calls {
+		if strings.HasPrefix(c, "stop:") {
+			t.Fatalf("a refused restore stopped something: %v", f.mgr.calls)
+		}
+	}
+	if f.flagOn() {
+		t.Fatal("a refused restore turned maintenance on")
 	}
 	if indexOf(f.runner.log, "psql -U postgres -d postgres -At -c drop", 0) >= 0 {
 		t.Fatal("a database was dropped")

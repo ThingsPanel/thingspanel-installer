@@ -102,6 +102,7 @@ type RestoreService struct {
 	VerifyBudget time.Duration
 	// Dir inside the PostgreSQL container where dumps are placed; removed afterwards.
 	WorkDir string
+	Sleep   func(time.Duration)
 }
 
 func (r *RestoreService) pg() *PostgresAdapter { return r.Backup.Adapter.(*PostgresAdapter) }
@@ -123,6 +124,11 @@ func (r *RestoreService) Restore(ctx context.Context, name string, report func(s
 		report = func(string, int) {}
 	}
 	project := r.Backup.Project
+	// 0. the data services must be running: after a host failure nothing may be. Start is idempotent.
+	report(StepVerifyingBackup, 1)
+	if err := r.ensureData(ctx, project); err != nil {
+		return err
+	}
 	// 1. preflight (nothing changed yet)
 	report(StepVerifyingBackup, 2)
 	manifest, err := r.Backup.Verify(name)
@@ -144,6 +150,29 @@ func (r *RestoreService) Restore(ctx context.Context, name string, report func(s
 		return err
 	}
 	return nil
+}
+
+// ensureData starts the "data" components (PostgreSQL, Redis) if they are not running and waits for PostgreSQL.
+func (r *RestoreService) ensureData(ctx context.Context, project string) error {
+	for _, c := range r.Operator.Config.Components {
+		if c.Group != "data" {
+			continue
+		}
+		if err := r.Manager.Start(ctx, project, c.Name); err != nil {
+			return CodedError{CodeRestoreStart}
+		}
+	}
+	sleep := r.Sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	for i := 0; i < 45; i++ {
+		if _, err := r.psql(ctx, "postgres", "select 1"); err == nil {
+			return nil
+		}
+		sleep(2 * time.Second)
+	}
+	return CodedError{CodeBackupStore}
 }
 
 // apply stops the stack, snapshots (when allowed), restores package `name` and brings the stack back.

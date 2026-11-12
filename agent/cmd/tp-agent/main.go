@@ -38,6 +38,10 @@ func main() {
 	systemTokenFile := flag.String("system-token-file", "", "system role: bearer token file (0600, >= 32 bytes, must differ from -token-file)")
 	systemConfigFile := flag.String("system-config", "", "system role: fixed stack description (compose project and components), written by the installer")
 	provision := flag.String("provision-system", "", "write the reviewed system-role config (system.json) and, once, a system token into this directory, then exit; needs -project")
+	releaseSource := flag.String("release-source", "", "with -provision-system: HTTPS base URL of the signed release; enables `system upgrade`")
+	releaseTrust := flag.String("release-trust-root", "", "with -release-source: release trust root (PEM) as seen inside this container")
+	releaseCA := flag.String("release-ca", "", "with -release-source: extra CA bundle (PEM) for the release source, as seen inside this container")
+	hostRoot := flag.String("host-root", "", "with -release-source: the stack directory on the Docker host")
 	project := flag.String("project", "", "compose project name (with -provision-system)")
 	sweep := flag.Duration("sweep-interval", 5*time.Second, "lease/generation sweep cadence")
 	flag.Parse()
@@ -51,7 +55,11 @@ func main() {
 		return
 	}
 	if *provision != "" {
-		if err := agent.ProvisionSystem(*provision, *project); err != nil {
+		var up *agent.ProvisionUpgrade
+		if *releaseSource != "" {
+			up = &agent.ProvisionUpgrade{Source: *releaseSource, TrustRootCtr: *releaseTrust, CACtr: *releaseCA, HostRoot: *hostRoot}
+		}
+		if err := agent.ProvisionSystem(*provision, *project, up); err != nil {
 			log.Fatalf("provision system role: %v", err)
 		}
 		return
@@ -169,7 +177,27 @@ func main() {
 				Plugins: func() (json.RawMessage, error) { return agent.ExportPlugins(store) },
 			}
 			systemService.EnableBackup(backupService)
-			systemService.EnableRestore(&agent.RestoreService{Backup: backupService, Operator: operator, Manager: inspector, Verifier: verifier})
+			restoreService := &agent.RestoreService{Backup: backupService, Operator: operator, Manager: inspector, Verifier: verifier}
+			systemService.EnableRestore(restoreService)
+			if systemCfg.Upgrade != nil {
+				download, err := agent.NewHTTPSDownloader(systemCfg.Upgrade.CAFile)
+				if err != nil {
+					log.Fatalf("upgrade release CA: %v", err)
+				}
+				live := &agent.LiveUpgrade{Config: systemCfg, Manager: inspector, Images: inspector, Helper: inspector, Backup: backupService,
+					Restore: restoreService, Verifier: verifier, Operator: operator, Download: download}
+				upgrader := &agent.Upgrader{Steps: live, StateFile: systemCfg.Upgrade.StateFile, LockDir: filepath.Join(systemCfg.Backup.Root, ".thingspanel-update"),
+					Logf: log.Printf}
+				systemService.EnableUpgrade(upgrader)
+				// An upgrade interrupted by a crash is cleaned up or rolled back before anything else may start.
+				if st, err := upgrader.Load(); err != nil {
+					log.Printf("upgrade state is unreadable; leaving it for a person: %v", err)
+				} else if st != nil && st.Phase != agent.UpCommitted && st.Phase != agent.UpAborted && st.Phase != agent.UpRolledBack && st.Phase != agent.UpNeedsHuman {
+					if _, err := operator.StartTask("upgrade", func(ctx context.Context, report func(string, int)) error { return upgrader.Resume(ctx, report) }); err != nil {
+						log.Printf("upgrade recovery could not start: %v", err)
+					}
+				}
+			}
 		}
 		if systemCfg.ScopeSync != nil {
 			syncer := &agent.ScopeSyncer{Config: *systemCfg.ScopeSync, Project: systemCfg.Project, Manager: inspector, Op: operator}

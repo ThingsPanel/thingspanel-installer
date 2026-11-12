@@ -26,7 +26,11 @@ type SystemService struct {
 	scope    *ScopeSyncer
 	backup   *BackupService
 	restore  *RestoreService
+	upgrade  *Upgrader
 }
+
+// EnableUpgrade turns on `system upgrade` (needs operations enabled).
+func (s *SystemService) EnableUpgrade(u *Upgrader) { s.upgrade = u }
 
 // EnableRestore turns on backup restore.
 func (s *SystemService) EnableRestore(r *RestoreService) { s.restore = r }
@@ -51,6 +55,7 @@ type systemRequest struct {
 	WaitSeconds int64  `json:"wait_seconds"`
 	Scope       string `json:"scope"`
 	Name        string `json:"name"`
+	To          string `json:"to"`
 }
 
 type systemResponse struct {
@@ -64,6 +69,7 @@ type systemResponse struct {
 	ScopeSync    *ScopeResult     `json:"scope_sync,omitempty"`
 	Backups      []BackupInfo     `json:"backups,omitempty"`
 	Backup       *BackupSummary   `json:"backup,omitempty"`
+	Upgrade      *UpgradeState    `json:"upgrade,omitempty"`
 }
 
 func (s *SystemService) Handler() http.Handler {
@@ -79,6 +85,11 @@ func (s *SystemService) Handler() http.Handler {
 			last := s.scope.Last()
 			resp.ScopeSync = &last
 		}
+		if s.upgrade != nil {
+			if st, err := s.upgrade.Load(); err == nil {
+				resp.Upgrade = st
+			}
+		}
 		return resp
 	}))
 	mux.HandleFunc("/v1/system/restart", s.guard(func(ctx context.Context, req systemRequest) systemResponse {
@@ -86,6 +97,19 @@ func (s *SystemService) Handler() http.Handler {
 			return systemResponse{Error: "restart is not enabled"}
 		}
 		op, err := s.operator.StartRestart(req.Scope)
+		if err != nil {
+			return systemResponse{Error: err.Error()}
+		}
+		return systemResponse{OK: true, Role: "system", Operation: &op}
+	}))
+	mux.HandleFunc("/v1/system/upgrade", s.guard(func(ctx context.Context, req systemRequest) systemResponse {
+		if s.upgrade == nil || s.operator == nil {
+			return systemResponse{Error: "upgrade is not enabled"}
+		}
+		to := req.To
+		op, err := s.operator.StartTask("upgrade", func(ctx context.Context, report func(string, int)) error {
+			return s.upgrade.Run(ctx, to, report)
+		})
 		if err != nil {
 			return systemResponse{Error: err.Error()}
 		}

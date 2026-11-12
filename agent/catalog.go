@@ -255,11 +255,9 @@ func (b ProfileBuilder) Build(e CatalogEntry, instance string, generation uint64
 	if installID != "" && !validInstallID(installID) {
 		return PreparationProfile{}, ErrPreparationPolicy
 	}
-	// Durable storage needs a tenant-unique install id; the legacy singleton instance must never get a volume that
-	// every tenant of the same plugin would share.
-	if len(e.Volumes) > 0 && installID == "" {
-		return PreparationProfile{}, ErrPreparationPolicy
-	}
+	// A volume belongs to the instance string (host + instance + key). Generation, secrets and state are keyed by that
+	// same string, so a bare "<catalog>" instance is exactly one install and gets exactly one volume. A control plane
+	// that runs several installs of one plugin must pass "<catalog>.<installID>" so each gets its own.
 	env := append([]string{}, e.Env...)
 	targets := make([]string, 0, len(e.EnvFromStack))
 	for t := range e.EnvFromStack {

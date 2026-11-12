@@ -60,11 +60,12 @@ func TestCatalogStorageValidationFailsClosed(t *testing.T) {
 	}
 }
 
-func TestVolumeEntryNeedsTenantInstallID(t *testing.T) {
+func TestVolumeEntryInstanceForms(t *testing.T) {
 	_, _, builder := catalogFixture(t)
 	e := volEntry()
-	if _, err := builder.Build(e, "matter", 1, nil, identityToken); err == nil {
-		t.Fatal("singleton instance must not get a volume shared by every tenant")
+	single, err := builder.Build(e, "matter", 1, nil, identityToken)
+	if err != nil || len(single.Mounts) != 1 {
+		t.Fatalf("a bare catalog instance is one install and may have a volume: %+v %v", single, err)
 	}
 	if _, err := builder.Build(e, "matter.bad_id", 1, nil, identityToken); err == nil {
 		t.Fatal("malformed install id accepted")
@@ -75,6 +76,9 @@ func TestVolumeEntryNeedsTenantInstallID(t *testing.T) {
 	p, err := builder.Build(e, "matter."+tenantA, 1, nil, identityToken)
 	if err != nil || len(p.Mounts) != 1 || p.Mounts[0].Key != "fabric" || len(p.Tmpfs) != 1 {
 		t.Fatalf("%+v %v", p, err)
+	}
+	if volumeName("host", "matter", "fabric") == volumeName("host", "matter."+tenantA, "fabric") {
+		t.Fatal("the bare instance and an install-id instance must not share a volume")
 	}
 }
 

@@ -48,8 +48,15 @@ HwERLCSb0Ng2n3l4djp5nlaxGQdYZFcwGZJ0UhdPyohfgnwpGnu6eZKicw==
 '''
 # Helpers are independently pinned by the entry-point-pinned updater. Keep old
 # profiles here when changing helper code so an offline last-good bundle can
-# still be restored by a later updater.
+# still be restored by a later updater. R5a: the first profile adds the system role to agent_host.py and lets
+# scope_sync.py defer to the Agent; the second is the previous release's.
 PLUGIN_HELPER_PROFILES = ({
+    'tools/plugin_bundle.py': 'a8fa326430c7433b20dc2cc699b115063be5e498a6a45f533dcf395a34a0ecfa',
+    'tools/plugin_catalog.py': 'fe0c4c4cb5ab9af8bfb08d0003e112c07d87680e62d8017b3d0996fdae0cca21',
+    'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',
+    'tools/agent_host.py': 'ff29d112d21d8ec29e3711d8b378e25919c700a96fabc66e06464be10d0454c4',
+    'tools/scope_sync.py': '592b29d7401f1ad18f66b511007584c6b41688817bd4a4fea7aa7ee85a6d40c9',
+}, {
     'tools/plugin_bundle.py': 'a8fa326430c7433b20dc2cc699b115063be5e498a6a45f533dcf395a34a0ecfa',
     'tools/plugin_catalog.py': 'fe0c4c4cb5ab9af8bfb08d0003e112c07d87680e62d8017b3d0996fdae0cca21',
     'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',
@@ -1253,7 +1260,7 @@ def start_plugin_agent(root, plugin_trust_root=None, verified_catalog=None, bund
         sys.executable, str(bundle / 'tools/agent_host.py'), 'up',
         '--stack-dir', str(root), '--agent-dir', str(root / '.tp-agent'),
         '--agent-bin', str(agent_bin), '--catalog', str(catalog), '--trust-root', str(trust_root),
-        '--defer-scope-watcher',
+        '--defer-scope-watcher', '--system',
     ], root)
     return True
 

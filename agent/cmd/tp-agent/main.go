@@ -37,6 +37,8 @@ func main() {
 	systemSocket := flag.String("system-socket", "", "system role: Unix socket for the system API (separate from -socket; never mount it into the platform backend)")
 	systemTokenFile := flag.String("system-token-file", "", "system role: bearer token file (0600, >= 32 bytes, must differ from -token-file)")
 	systemConfigFile := flag.String("system-config", "", "system role: fixed stack description (compose project and components), written by the installer")
+	provision := flag.String("provision-system", "", "write the reviewed system-role config (system.json) and, once, a system token into this directory, then exit; needs -project")
+	project := flag.String("project", "", "compose project name (with -provision-system)")
 	sweep := flag.Duration("sweep-interval", 5*time.Second, "lease/generation sweep cadence")
 	flag.Parse()
 	if *initState != "" {
@@ -45,6 +47,12 @@ func main() {
 		}
 		if err := agent.Initialize(*statePath, *initState); err != nil {
 			log.Fatal(err)
+		}
+		return
+	}
+	if *provision != "" {
+		if err := agent.ProvisionSystem(*provision, *project); err != nil {
+			log.Fatalf("provision system role: %v", err)
 		}
 		return
 	}

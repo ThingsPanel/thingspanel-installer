@@ -96,6 +96,10 @@ def ensure(stack_dir, state_dir, interval=DEFAULT_INTERVAL, spawn=subprocess.Pop
     """Start a detached watcher unless one is already running for this state dir. Returns 'running' or 'started'."""
     state_dir = Path(state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
+    if (state_dir / 'system' / 'system.json').is_file():
+        # The Agent's system role does this work now; never run a second watcher beside it.
+        stop(state_dir)
+        return 'running'
     pidfile = pid_file(state_dir)
     try:
         with installer_lock(stack_dir) as updater:

@@ -166,14 +166,6 @@ func (p *PostgresAdapter) Describe(ctx context.Context) (StoreInfo, error) {
 	if info.Server, err = p.query(ctx, "postgres", "show server_version"); err != nil {
 		return info, err
 	}
-	defer func() {
-		// A freshly initialised server has no extension installed yet: what matters for a restore is the version it would install.
-		if info.Timescaledb == "" {
-			if v, err := p.query(ctx, "postgres", "select coalesce(default_version,'') from pg_available_extensions where name='timescaledb'"); err == nil {
-				info.Timescaledb = v
-			}
-		}
-	}()
 	for _, db := range info.Databases {
 		if v, err := p.query(ctx, db, "select extversion from pg_extension where extname='timescaledb'"); err == nil && v != "" && info.Timescaledb == "" {
 			info.Timescaledb = v
@@ -186,6 +178,12 @@ func (p *PostgresAdapter) Describe(ctx context.Context) (StoreInfo, error) {
 			if n, err := strconv.Atoi(v); err == nil {
 				info.SysVersion = n
 			}
+		}
+	}
+	// A freshly initialised server has no extension installed yet: what matters for a restore is the version it would install.
+	if info.Timescaledb == "" {
+		if v, err := p.query(ctx, "postgres", "select coalesce(default_version,'') from pg_available_extensions where name='timescaledb'"); err == nil {
+			info.Timescaledb = v
 		}
 	}
 	return info, nil

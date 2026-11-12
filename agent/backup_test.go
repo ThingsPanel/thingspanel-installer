@@ -17,6 +17,7 @@ import (
 )
 
 type fakeRunner struct {
+	emptyServer   bool
 	log           []string
 	failRestore   int // number of upcoming pg_restore runs that fail
 	failRestoreAt string
@@ -50,8 +51,12 @@ func (f *fakeRunner) ExecStream(_ context.Context, _, _ string, argv []string, w
 			io.WriteString(w, "ThingsPanel\ndevice_metadata\n")
 		case strings.Contains(sql, "server_version"):
 			io.WriteString(w, "14.5\n")
-		case strings.Contains(sql, "timescaledb"):
+		case strings.Contains(sql, "pg_available_extensions"):
 			io.WriteString(w, "2.8.1\n")
+		case strings.Contains(sql, "timescaledb"):
+			if !f.emptyServer {
+				io.WriteString(w, "2.8.1\n")
+			}
 		case strings.Contains(sql, "schema_migrations"):
 			io.WriteString(w, "39\n")
 		case strings.Contains(sql, "sys_version"):
@@ -353,5 +358,15 @@ func TestDemuxSplitsStdoutAndKeepsStderrTail(t *testing.T) {
 	tail, err := demux(&in, &out)
 	if err != nil || out.String() != "hello world" || tail != "warn" {
 		t.Fatalf("%q %q %v", out.String(), tail, err)
+	}
+}
+
+// An empty server (before a restore) has no extension installed; Describe reports the version it would install.
+func TestDescribeOnAnEmptyServerReportsTheAvailableTimescaleVersion(t *testing.T) {
+	r := &fakeRunner{emptyServer: true}
+	a := &PostgresAdapter{Runner: r, Project: "tp", Service: "postgres", User: "postgres"}
+	info, err := a.Describe(context.Background())
+	if err != nil || info.Timescaledb != "2.8.1" {
+		t.Fatalf("%+v %v", info, err)
 	}
 }

@@ -33,3 +33,8 @@
 - 控制面传租户安装 ID：安装器 `tools/plugin_install.py` 仍以 `entry['id']` 作 instance；平台运行时身份 API 的 `plugin_instance` 是否接受 `<id>.<installID>` 未验证（改平台源码超出范围）。
 - purge（显式删卷）未实现。
 - 网络别名仍按 catalog ID 固定。
+
+## 补充（平台全链路，同日）
+- 修正：带卷的条目**不再强制**要求租户安装 ID。后端的插件安装以插件 id 作 instance，同一个 instance 字符串本来就是一次安装（代数、密钥、状态都按它存），裸 `<catalog>` 实例拿一个卷不会跨租户共用；需要同插件多安装的控制面仍可传 `<catalog>.<installID>`。
+- 用本分支构建的 Agent 替换了 tp-base 的 `bin/tp-agent`（备份 `bin/tp-agent.dea71d8.bak-20261112`，旧目录备份 `catalog/plugin-catalog.json{,.sig}.bak-20261112`），用本地 dev 密钥（用户 2026-11-12 授权）签名目录 v4 并安装 `matter-split`，经平台插件安装 API 成功（enabled/第 1 代/health ok）。Agent 容器：65534、只读根、cap-drop ALL、64 MiB、16 pids，卷与别名正确。
+- 结果与未通过项见 Matter 仓库 `docs/tasks/SPLIT-PLATFORM-CHAIN.md`。

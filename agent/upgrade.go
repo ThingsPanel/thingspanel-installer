@@ -164,6 +164,7 @@ func (u *Upgrader) Load() (*UpgradeState, error) {
 }
 
 func (u *Upgrader) save(s *UpgradeState, phase string) error {
+	u.logf("upgrade %s: phase %s", s.ID, phase)
 	s.Phase = phase
 	s.UpdatedAt = u.now()
 	raw, err := json.Marshal(s)

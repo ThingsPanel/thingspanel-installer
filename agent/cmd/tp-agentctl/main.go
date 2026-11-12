@@ -42,7 +42,7 @@ func main() {
 			os.Exit(2)
 		}
 		skip := 2
-		if strings.HasPrefix(sub, "backup/") {
+		if flag.Arg(1) == "backup" { // "system backup create", not the "system backup/create" spelling
 			skip = 3
 		}
 		endpoint, args, system = "/v1/system/"+sub, flag.Args()[skip:], true

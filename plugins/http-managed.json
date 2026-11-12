@@ -1,0 +1,25 @@
+{
+  "id": "http-adapter",
+  "version": "1.2.0",
+  "kind": "service",
+  "description": "HTTP device uplink, direct downlink and long polling; devices are created from HTTP templates in ThingsPanel.",
+  "image_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "entrypoint": "/app/tp-plugin-http",
+  "args": ["-c", "/app/config/config.yaml"],
+  "env": ["P_PLATFORM_MANAGED=true", "P_PLATFORM_SERVICE_IDENTIFIER=HTTP", "P_PLATFORM_URL=http://backend:9999", "P_PLATFORM_MQTT_BROKER=tcp://mosquitto:1883", "P_SERVER_AUTO_REGISTER=false", "P_LOG_ENABLEFILE=false", "P_LOG_DEVICE_LOG_ENABLED=false"],
+  "env_from_stack": {"P_PLATFORM_MQTT_USERNAME": "TP_HTTP_MQTT_USER", "P_PLATFORM_MQTT_PASSWORD": "TP_HTTP_MQTT_PASSWORD"},
+  "identity": {"token_env": "P_PLATFORM_API_TOKEN"},
+  "health": {"port": 19091, "path": "/health"},
+  "platform": {
+    "binding": "none",
+    "service_identifier": "HTTP",
+    "network_alias": "tp-plugin-http-adapter",
+    "http_port": 19091,
+    "service_plugin": {
+      "name": "HTTP",
+      "service_type": 1,
+      "description": "Managed HTTP protocol plugin",
+      "config": {"sub_topic_prefix": "plugin/HTTP/", "http_address": "{alias}:{http_port}"}
+    }
+  }
+}

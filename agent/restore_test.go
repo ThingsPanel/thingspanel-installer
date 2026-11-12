@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -241,4 +242,30 @@ func TestRestoreConfigIsAtomicSkipsIdenticalAndRespectsOpenJournal(t *testing.T)
 	if b, _ := os.ReadFile(filepath.Join(f.root, ".env")); string(b) != "SECRET=1\n" {
 		t.Fatal(".env was touched")
 	}
+}
+
+// With the backend stopped, the program version comes from the last time it answered.
+func TestPlatformVersionFallsBackToLastKnown(t *testing.T) {
+	svc, runner, _ := backupFixture(t)
+	if v := svc.platformVersion(context.Background()); v != "v1.4.0" {
+		t.Fatalf("live: %s", v)
+	}
+	down := &failingVersionRunner{fakeRunner: runner}
+	svc.Runner = down
+	if v := svc.platformVersion(context.Background()); v != "v1.4.0" {
+		t.Fatalf("fallback: %s", v)
+	}
+	_ = os.Remove(filepath.Join(svc.Config.Dir, ".last-version"))
+	if v := svc.platformVersion(context.Background()); v != "unknown" {
+		t.Fatalf("no cache: %s", v)
+	}
+}
+
+type failingVersionRunner struct{ *fakeRunner }
+
+func (f *failingVersionRunner) ExecStream(ctx context.Context, p, s string, argv []string, w io.Writer) (int, string, error) {
+	if argv[0] == "/app/go" {
+		return -1, "", ErrNoContainer
+	}
+	return f.fakeRunner.ExecStream(ctx, p, s, argv, w)
 }

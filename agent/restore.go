@@ -129,7 +129,10 @@ func (r *RestoreService) Restore(ctx context.Context, name string, report func(s
 	if err != nil {
 		return CodedError{CodeRestoreVerify}
 	}
-	currentVersion := r.Backup.platformVersion(ctx)
+	currentVersion, _ := r.Backup.platformVersionLive(ctx) // falls back to the last version the backend reported
+	if currentVersion == "" {
+		currentVersion = "unknown"
+	}
 	info, err := r.Backup.Adapter.Describe(ctx)
 	if err != nil {
 		return CodedError{CodeBackupStore}

@@ -166,6 +166,14 @@ func (p *PostgresAdapter) Describe(ctx context.Context) (StoreInfo, error) {
 	if info.Server, err = p.query(ctx, "postgres", "show server_version"); err != nil {
 		return info, err
 	}
+	defer func() {
+		// A freshly initialised server has no extension installed yet: what matters for a restore is the version it would install.
+		if info.Timescaledb == "" {
+			if v, err := p.query(ctx, "postgres", "select coalesce(default_version,'') from pg_available_extensions where name='timescaledb'"); err == nil {
+				info.Timescaledb = v
+			}
+		}
+	}()
 	for _, db := range info.Databases {
 		if v, err := p.query(ctx, db, "select extversion from pg_extension where extname='timescaledb'"); err == nil && v != "" && info.Timescaledb == "" {
 			info.Timescaledb = v
@@ -279,14 +287,34 @@ func (s *BackupService) ensureDir() error {
 	return os.Chmod(s.Config.Dir, 0o700)
 }
 
+var versionText = regexp.MustCompile(`^[A-Za-z0-9._-]{1,40}$`)
+
+// platformVersion asks the running backend for its version. A restore is usually needed when the backend is
+// not running, so the last version it reported is kept in <backup dir>/.last-version and used as a fallback.
 func (s *BackupService) platformVersion(ctx context.Context) string {
+	v, _ := s.platformVersionLive(ctx)
+	if v != "" {
+		return v
+	}
+	return "unknown"
+}
+
+func (s *BackupService) platformVersionLive(ctx context.Context) (string, bool) {
 	var out bytes.Buffer
 	code, _, err := s.Runner.ExecStream(ctx, s.Project, s.Config.VersionService, s.Config.VersionArgv, &out)
 	v := strings.TrimSpace(out.String())
-	if err != nil || code != 0 || !regexp.MustCompile(`^[A-Za-z0-9._-]{1,40}$`).MatchString(v) {
-		return "unknown"
+	if err == nil && code == 0 && versionText.MatchString(v) {
+		if os.MkdirAll(s.Config.Dir, 0o700) == nil {
+			_ = atomicWrite(filepath.Join(s.Config.Dir, ".last-version"), []byte(v+"\n"), 0o600, false)
+		}
+		return v, true
 	}
-	return v
+	if raw, err := os.ReadFile(filepath.Join(s.Config.Dir, ".last-version")); err == nil {
+		if cached := strings.TrimSpace(string(raw)); versionText.MatchString(cached) {
+			return cached, false
+		}
+	}
+	return "", false
 }
 
 // CleanPartials removes leftovers of an interrupted backup. The caller holds the operation lock, so any

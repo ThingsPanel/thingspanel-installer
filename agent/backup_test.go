@@ -181,10 +181,16 @@ func TestFailedBackupLeavesNothingBehind(t *testing.T) {
 	if !errors.As(err, &ce) || ce.Code != CodeBackupDump {
 		t.Fatalf("err=%v", err)
 	}
-	left, _ := os.ReadDir(svc.Config.Dir)
-	if len(left) != 0 {
-		t.Fatalf("leftovers: %v", left)
+	for _, e := range mustReadDir(svc.Config.Dir) {
+		if e.Name() != ".last-version" {
+			t.Fatalf("leftover: %s", e.Name())
+		}
 	}
+}
+
+func mustReadDir(d string) []os.DirEntry {
+	e, _ := os.ReadDir(d)
+	return e
 }
 
 // A process killed mid-write leaves *.partial files. They are not listed, not verifiable as a package, and

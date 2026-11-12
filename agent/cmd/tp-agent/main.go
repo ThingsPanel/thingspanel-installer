@@ -146,10 +146,12 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		systemService, err := agent.NewSystemService(systemToken, &agent.Verifier{Config: systemCfg, Inspector: inspector, Prober: agent.NetProber{}}, agentVersion)
+		verifier := &agent.Verifier{Config: systemCfg, Inspector: inspector, Prober: agent.NetProber{}}
+		systemService, err := agent.NewSystemService(systemToken, verifier, agentVersion)
 		if err != nil {
 			log.Fatal(err)
 		}
+		systemService.EnableOperations(&agent.Operator{Config: systemCfg, Manager: inspector, Verifier: verifier})
 		systemListener, err := listenPrivate(*systemSocket)
 		if err != nil {
 			log.Fatal(err)

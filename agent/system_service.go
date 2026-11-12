@@ -22,7 +22,11 @@ type SystemService struct {
 	token    []byte
 	verifier *Verifier
 	version  string
+	operator *Operator // nil: restart is not available
 }
+
+// EnableOperations turns on the actions that change the stack (restart).
+func (s *SystemService) EnableOperations(op *Operator) { s.operator = op }
 
 func NewSystemService(token string, verifier *Verifier, agentVersion string) (*SystemService, error) {
 	if len(token) < 32 || verifier == nil || verifier.Inspector == nil || verifier.Config.Validate() != nil {
@@ -32,23 +36,40 @@ func NewSystemService(token string, verifier *Verifier, agentVersion string) (*S
 }
 
 type systemRequest struct {
-	WaitSeconds int64 `json:"wait_seconds"`
+	WaitSeconds int64  `json:"wait_seconds"`
+	Scope       string `json:"scope"`
 }
 
 type systemResponse struct {
-	OK           bool          `json:"ok"`
-	Error        string        `json:"error,omitempty"`
-	Role         string        `json:"role,omitempty"`
-	AgentVersion string        `json:"agent_version,omitempty"`
-	Project      string        `json:"project,omitempty"`
-	Result       *VerifyResult `json:"result,omitempty"`
+	OK           bool             `json:"ok"`
+	Error        string           `json:"error,omitempty"`
+	Role         string           `json:"role,omitempty"`
+	AgentVersion string           `json:"agent_version,omitempty"`
+	Project      string           `json:"project,omitempty"`
+	Result       *VerifyResult    `json:"result,omitempty"`
+	Operation    *OperationStatus `json:"operation,omitempty"`
 }
 
 func (s *SystemService) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/system/status", s.guard(func(ctx context.Context, _ systemRequest) systemResponse {
 		r := s.verifier.Once(ctx)
-		return systemResponse{OK: true, Role: "system", AgentVersion: s.version, Project: s.verifier.Config.Project, Result: &r}
+		resp := systemResponse{OK: true, Role: "system", AgentVersion: s.version, Project: s.verifier.Config.Project, Result: &r}
+		if s.operator != nil {
+			op := s.operator.Status()
+			resp.Operation = &op
+		}
+		return resp
+	}))
+	mux.HandleFunc("/v1/system/restart", s.guard(func(ctx context.Context, req systemRequest) systemResponse {
+		if s.operator == nil {
+			return systemResponse{Error: "restart is not enabled"}
+		}
+		op, err := s.operator.StartRestart(req.Scope)
+		if err != nil {
+			return systemResponse{Error: err.Error()}
+		}
+		return systemResponse{OK: true, Role: "system", Operation: &op}
 	}))
 	mux.HandleFunc("/v1/system/verify", s.guard(func(ctx context.Context, req systemRequest) systemResponse {
 		wait := time.Duration(req.WaitSeconds) * time.Second

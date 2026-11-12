@@ -32,8 +32,8 @@ func main() {
 	endpoint, args := flag.Arg(0), flag.Args()[1:]
 	system := false
 	if endpoint == "system" {
-		if flag.NArg() < 2 || (flag.Arg(1) != "status" && flag.Arg(1) != "verify") {
-			fmt.Fprintln(os.Stderr, "usage: tp-agentctl -socket SYS -token-file F system status|verify [wait_seconds=N]")
+		if flag.NArg() < 2 || (flag.Arg(1) != "status" && flag.Arg(1) != "verify" && flag.Arg(1) != "restart") {
+			fmt.Fprintln(os.Stderr, "usage: tp-agentctl -socket SYS -token-file F system status|verify|restart [wait_seconds=N] [scope=control|full]")
 			os.Exit(2)
 		}
 		endpoint, args, system = "/v1/system/"+flag.Arg(1), flag.Args()[2:], true
@@ -72,6 +72,9 @@ func main() {
 	fmt.Printf("%d %s", response.StatusCode, out)
 	if response.StatusCode != http.StatusOK {
 		os.Exit(1)
+	}
+	if system && endpoint == "/v1/system/restart" {
+		return // accepted; poll `system status` for progress
 	}
 	if system {
 		var parsed struct {

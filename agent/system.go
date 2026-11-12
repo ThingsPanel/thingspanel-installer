@@ -48,6 +48,8 @@ type SystemConfig struct {
 	Components []Component `json:"components"` // in START order; stop order is the reverse
 	// CheckConfig is run inside a running container before a restart. Optional; fixed argv from this file only.
 	CheckConfig *CheckConfig `json:"check_config,omitempty"`
+	// Backup describes what a backup contains and where it goes. Optional.
+	Backup *BackupConfig `json:"backup,omitempty"`
 	// ScopeSync keeps the Broker's device scope in step with the platform (the former P1 watcher). Optional.
 	ScopeSync *ScopeSyncConfig `json:"scope_sync,omitempty"`
 	// StatusDir receives status.json and the maintenance flag `active` (world-readable, no secrets). Optional.
@@ -118,6 +120,11 @@ func (c SystemConfig) Validate() error {
 	}
 	if c.StatusDir != "" && !strings.HasPrefix(c.StatusDir, "/") {
 		return ErrSystemConfig
+	}
+	if c.Backup != nil {
+		if err := c.Backup.validate(seen); err != nil {
+			return err
+		}
 	}
 	if c.ScopeSync != nil {
 		if err := c.ScopeSync.validate(seen); err != nil {

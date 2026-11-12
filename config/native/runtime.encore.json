@@ -9,7 +9,8 @@
   "hosted_services": [
     "authn",
     "thingmodel",
-    "automation"
+    "automation",
+    "brokerscope"
   ],
   "hosted_gateways": [],
   "sql_servers": [

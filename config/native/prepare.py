@@ -333,6 +333,7 @@ def configure():
     defaults = {'TP_DATABASE_PASSWORD': 'postgresThingsPanel', 'TP_NATIVE_DB_PASSWORD': current.get('TP_DATABASE_PASSWORD', 'postgresThingsPanel'),
                 'TP_BROKER_DATABASE_DSN': 'host=postgres user=postgres password=' + current.get('TP_DATABASE_PASSWORD', 'postgresThingsPanel') + ' dbname=ThingsPanel port=5432 sslmode=disable',
                 'TP_JWT_KEY': secrets.token_hex(32), 'TP_AUTOMATION_TOKEN': secrets.token_hex(32),
+                'TP_BROKER_SCOPE_TOKEN': secrets.token_hex(32),
                 'TP_MQTT_USER': 'tp-community-platform', 'TP_MQTT_PASSWORD': secrets.token_hex(32),
                 'TP_PROTOCOL_MQTT_USER': 'tp-community-protocols', 'TP_PROTOCOL_MQTT_PASSWORD': secrets.token_hex(32),
                 'TP_DEPLOYMENT_ID': 'community', 'TP_BROKER_CELL': CELL, 'TP_BROKER_INSTANCE': INSTANCE, 'TP_MQTT_CLIENT_ID': CLIENT,

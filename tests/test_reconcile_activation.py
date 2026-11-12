@@ -78,6 +78,7 @@ class ReconcileActivation(unittest.TestCase):
         agent_index = next(i for i, args in enumerate(calls) if 'agent_host.py' in ' '.join(args))
         compose_index = next(i for i, args in enumerate(calls) if args[:3] == ['docker', 'compose', 'up'])
         self.assertLess(agent_index, compose_index)
+        self.assertIn('--system', calls[agent_index])  # R5a: the Agent is started with the system role
 
     def test_reconciliation_starts_scope_watcher_after_releasing_update_lock(self):
         tx, _, _ = self.transaction()

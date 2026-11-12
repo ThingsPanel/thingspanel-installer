@@ -7,6 +7,9 @@
 Layout under --agent-dir (created 0700):
     run/    agent.sock + token      the ONLY part the platform backend container mounts (TP_AGENT_SOCKET/TP_AGENT_TOKEN_FILE)
     state/  state.json, secrets.json   Agent-private: journal and secret store (site secrets, identity tokens)
+    system/ agent-system.sock, token, system.json   with --system: the system role (restart, backup, restore, upgrade);
+                                    its own socket and token, NEVER mounted into the platform backend container
+    backups/, status/               with --system: backup archives; status.json and the maintenance flag
 
 The Agent verifies the signed catalog itself and builds plugin containers from it; nothing here handles a secret.
 Installing plugins is done in the platform UI (or `plugin_install.py`, which calls the same backend API).
@@ -60,6 +63,21 @@ def ensure_scope_watcher(stack, agent_dir, *, deferred=False, sleep=time.sleep):
     return status
 
 
+def provision_system(args, agent_dir, project):
+    """Write the reviewed system-role config and token (done by the Agent binary itself) and return docker flags."""
+    sysdir, backups, status = agent_dir / 'system', agent_dir / 'backups', agent_dir / 'status'
+    private_dir(sysdir)
+    private_dir(backups)
+    private_dir(status, 0o755)
+    sh(['docker', 'run', '--rm', '--entrypoint', '/tp-agent', '-u', '0', '-v', '%s:/tp-agent:ro' % Path(args.agent_bin).resolve(),
+        '-v', '%s:/run/agent/system' % sysdir, args.agent_image, '-provision-system', '/run/agent/system', '-project', project])
+    mounts = ['-v', '%s:/run/agent/system' % sysdir, '-v', '%s:/run/agent/stack' % Path(args.stack_dir).resolve(),
+              '-v', '%s:/run/agent/backups' % backups, '-v', '%s:/run/agent/status' % status]
+    flags = ['-system-socket', '/run/agent/system/agent-system.sock', '-system-token-file', '/run/agent/system/token',
+             '-system-config', '/run/agent/system/system.json']
+    return mounts, flags
+
+
 def up(args):
     agent_dir, stack = Path(args.agent_dir).resolve(), Path(args.stack_dir).resolve()
     project = project_of(stack)
@@ -76,6 +94,11 @@ def up(args):
     if not (catalog.is_file() and Path(str(catalog) + '.sig').is_file() and trust_root.is_file()):
         raise RuntimeError('catalog, catalog signature and trust root must exist')
     network = args.network or '%s_thingspanel_network' % project
+    system_mounts, system_flags = [], []
+    if args.system:
+        system_mounts, system_flags = provision_system(args, agent_dir, project)
+        # The system role probes the stack's services by name, so the Agent joins the stack network.
+        system_mounts += ['--network', network]
     mounts = ['-v', '%s:/tp-agent:ro' % Path(args.agent_bin).resolve(), '-v', '%s:/run/agent-ctl' % run, '-v', '%s:/run/agent/state' % state,
               '-v', '%s:/run/agent/catalog:ro' % catalog.parent, '-v', '%s:/run/agent/trust-root.pem:ro' % trust_root,
               '-v', '%s:/run/agent/stack.env:ro' % (stack / '.env')]
@@ -84,10 +107,10 @@ def up(args):
             '-v', '%s:/run/agent/state' % state, args.agent_image, '-state', '/run/agent/state/state.json', '-init', 'host-' + name])
     sh(['docker', 'rm', '-f', name], check=False)
     sh(['docker', 'run', '-d', '--name', name, '--restart', 'unless-stopped', '--entrypoint', '/tp-agent', '-u', '0'] + mounts +
-       ['-v', '/var/run/docker.sock:/var/run/docker.sock', args.agent_image, '-state', '/run/agent/state/state.json',
+       system_mounts + ['-v', '/var/run/docker.sock:/var/run/docker.sock', args.agent_image, '-state', '/run/agent/state/state.json',
         '-socket', '/run/agent-ctl/agent.sock', '-token-file', '/run/agent-ctl/token',
         '-catalog', '/run/agent/catalog/' + catalog.name, '-trust-root', '/run/agent/trust-root.pem',
-        '-stack-env', '/run/agent/stack.env', '-network', network, '-docker-socket', '/var/run/docker.sock', '-sweep-interval', '5s'])
+        '-stack-env', '/run/agent/stack.env', '-network', network, '-docker-socket', '/var/run/docker.sock', '-sweep-interval', '5s'] + system_flags)
     for _ in range(20):
         if (run / 'agent.sock').exists():
             break
@@ -97,6 +120,11 @@ def up(args):
     print('Agent %s is up; the platform backend mounts %s as /run/tp-agent' % (name, run))
     # Installer activation owns the update lock while starting this process;
     # direct/manual starts retain the existing wait behavior.
+    if args.system:
+        # The Agent keeps the Broker scope in step itself; a second (Python) watcher would only race it.
+        scope_sync.stop(agent_dir)
+        print('Broker scope sync: handled by the Agent (system role)')
+        return
     ensure_scope_watcher(stack, agent_dir, deferred=args.defer_scope_watcher)
 
 
@@ -114,6 +142,8 @@ def main():
     parser.add_argument('--trust-root')
     parser.add_argument('--agent-image', default=DEFAULT_IMAGE)
     parser.add_argument('--network')
+    parser.add_argument('--system', action='store_true',
+                        help='also serve the system role (restart/backup/restore/upgrade) and let the Agent do the Broker scope sync')
     parser.add_argument('--defer-scope-watcher', action='store_true',
                         help='installer owns the update lock and will start the watcher after activation')
     args = parser.parse_args()

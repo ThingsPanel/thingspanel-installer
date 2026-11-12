@@ -22,7 +22,8 @@ class SystemRole(unittest.TestCase):
     def args(self, root, **extra):
         values = dict(stack_dir=str(root / 'stack'), agent_dir=str(root / 'agent'), agent_bin=str(root / 'tp-agent'),
                       catalog=str(root / 'plugin-catalog.json'), trust_root=str(root / 'root.pem'), agent_image='img:1',
-                      network=None, system=True, defer_scope_watcher=True)
+                      network=None, system=True, defer_scope_watcher=True,
+                      release_source=None, release_trust_root=None, release_ca=None)
         values.update(extra)
         return mock.Mock(**values)
 
@@ -62,6 +63,23 @@ class SystemRole(unittest.TestCase):
         self.assertEqual(provision[provision.index('-provision-system') + 1], '/run/agent/system')
         stop.assert_called_once()          # the Python watcher is stopped, not started beside the Agent
         ensure.assert_not_called()
+
+    def test_release_source_enables_upgrade_only_with_a_trust_root(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'stack').mkdir()
+            with mock.patch.object(agent_host, 'sh', return_value=mock.Mock()):
+                with self.assertRaisesRegex(RuntimeError, 'unsigned upgrades are not allowed'):
+                    agent_host.provision_system(self.args(root, release_source='https://updates.example/release'), root / 'agent', 'p')
+                calls = []
+                with mock.patch.object(agent_host, 'sh', lambda a, check=True: calls.append(a)):
+                    mounts, _ = agent_host.provision_system(self.args(root, release_source='https://updates.example/release',
+                                                                      release_trust_root=str(root / 'root.pem')), root / 'agent', 'p')
+                provision = calls[0]
+                self.assertEqual(provision[provision.index('-release-source') + 1], 'https://updates.example/release')
+                self.assertIn('-host-root', provision)
+                self.assertTrue(any(m.endswith(':/run/agent/release-root.pem:ro') for m in mounts))
 
     def test_without_system_flag_nothing_changes(self):
         calls, stop, ensure, root = self.run_up(False)

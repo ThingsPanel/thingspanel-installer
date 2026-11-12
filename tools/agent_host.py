@@ -69,9 +69,21 @@ def provision_system(args, agent_dir, project):
     private_dir(sysdir)
     private_dir(backups)
     private_dir(status, 0o755)
+    provision = ['-provision-system', '/run/agent/system', '-project', project]
+    release_mounts = []
+    if args.release_source:
+        # `system upgrade` needs a signed release source and the trust root for it, both supplied out of band.
+        if not args.release_trust_root:
+            raise RuntimeError('--release-source needs --release-trust-root: unsigned upgrades are not allowed')
+        provision += ['-release-source', args.release_source, '-release-trust-root', '/run/agent/release-root.pem',
+                      '-host-root', str(Path(args.stack_dir).resolve())]
+        release_mounts += ['-v', '%s:/run/agent/release-root.pem:ro' % Path(args.release_trust_root).resolve()]
+        if args.release_ca:
+            provision += ['-release-ca', '/run/agent/release-ca.pem']
+            release_mounts += ['-v', '%s:/run/agent/release-ca.pem:ro' % Path(args.release_ca).resolve()]
     sh(['docker', 'run', '--rm', '--entrypoint', '/tp-agent', '-u', '0', '-v', '%s:/tp-agent:ro' % Path(args.agent_bin).resolve(),
-        '-v', '%s:/run/agent/system' % sysdir, args.agent_image, '-provision-system', '/run/agent/system', '-project', project])
-    mounts = ['-v', '%s:/run/agent/system' % sysdir, '-v', '%s:/run/agent/stack' % Path(args.stack_dir).resolve(),
+        '-v', '%s:/run/agent/system' % sysdir, args.agent_image] + provision)
+    mounts = release_mounts + ['-v', '%s:/run/agent/system' % sysdir, '-v', '%s:/run/agent/stack' % Path(args.stack_dir).resolve(),
               '-v', '%s:/run/agent/backups' % backups, '-v', '%s:/run/agent/status' % status]
     flags = ['-system-socket', '/run/agent/system/agent-system.sock', '-system-token-file', '/run/agent/system/token',
              '-system-config', '/run/agent/system/system.json']
@@ -144,6 +156,9 @@ def main():
     parser.add_argument('--network')
     parser.add_argument('--system', action='store_true',
                         help='also serve the system role (restart/backup/restore/upgrade) and let the Agent do the Broker scope sync')
+    parser.add_argument('--release-source', help='with --system: HTTPS base URL of the signed release; enables `system upgrade`')
+    parser.add_argument('--release-trust-root', help='with --release-source: PEM public key that must have signed the release')
+    parser.add_argument('--release-ca', help='with --release-source: extra CA bundle (PEM) for the release source')
     parser.add_argument('--defer-scope-watcher', action='store_true',
                         help='installer owns the update lock and will start the watcher after activation')
     args = parser.parse_args()

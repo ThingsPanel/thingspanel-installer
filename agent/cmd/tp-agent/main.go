@@ -124,6 +124,7 @@ func main() {
 		log.Fatal(err)
 	}
 	var systemServer *http.Server
+	var scopeSyncer *agent.ScopeSyncer
 	if *systemSocket != "" || *systemTokenFile != "" || *systemConfigFile != "" {
 		if *systemSocket == "" || *systemTokenFile == "" || *systemConfigFile == "" {
 			log.Fatal("-system-socket, -system-token-file and -system-config must be given together")
@@ -146,9 +147,17 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		systemService, err := agent.NewSystemService(systemToken, &agent.Verifier{Config: systemCfg, Inspector: inspector, Prober: agent.NetProber{}}, agentVersion)
+		verifier := &agent.Verifier{Config: systemCfg, Inspector: inspector, Prober: agent.NetProber{}}
+		systemService, err := agent.NewSystemService(systemToken, verifier, agentVersion)
 		if err != nil {
 			log.Fatal(err)
+		}
+		operator := &agent.Operator{Config: systemCfg, Manager: inspector, Verifier: verifier}
+		systemService.EnableOperations(operator)
+		if systemCfg.ScopeSync != nil {
+			syncer := &agent.ScopeSyncer{Config: *systemCfg.ScopeSync, Project: systemCfg.Project, Manager: inspector, Op: operator}
+			systemService.EnableScopeStatus(syncer)
+			scopeSyncer = syncer
 		}
 		systemListener, err := listenPrivate(*systemSocket)
 		if err != nil {
@@ -164,6 +173,9 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if scopeSyncer != nil {
+		go scopeSyncer.Run(ctx, func(r agent.ScopeResult) { log.Printf("broker scope sync: %s %s", r.Outcome, r.Code) })
+	}
 	go service.RunSweeper(ctx, *sweep, func(err error) { log.Printf("sweep: %v", err) })
 	server := &http.Server{Handler: service.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {

@@ -44,8 +44,20 @@ type Component struct {
 
 // SystemConfig is the fixed description of the stack the system role manages.
 type SystemConfig struct {
-	Project    string      `json:"project"` // compose project name (label com.docker.compose.project)
-	Components []Component `json:"components"`
+	Project    string      `json:"project"`    // compose project name (label com.docker.compose.project)
+	Components []Component `json:"components"` // in START order; stop order is the reverse
+	// CheckConfig is run inside a running container before a restart. Optional; fixed argv from this file only.
+	CheckConfig *CheckConfig `json:"check_config,omitempty"`
+	// ScopeSync keeps the Broker's device scope in step with the platform (the former P1 watcher). Optional.
+	ScopeSync *ScopeSyncConfig `json:"scope_sync,omitempty"`
+	// StatusDir receives status.json and the maintenance flag `active` (world-readable, no secrets). Optional.
+	StatusDir string `json:"status_dir,omitempty"`
+}
+
+// CheckConfig names the component that validates configuration and the exact command to run in it.
+type CheckConfig struct {
+	Service string   `json:"service"`
+	Argv    []string `json:"argv"`
 }
 
 // LoadSystemConfig reads and validates the config file. The file must be a private regular file.
@@ -97,6 +109,19 @@ func (c SystemConfig) Validate() error {
 			}
 		default:
 			return ErrSystemConfig
+		}
+	}
+	if cc := c.CheckConfig; cc != nil {
+		if !seen[cc.Service] || len(cc.Argv) == 0 || len(cc.Argv) > 8 || !strings.HasPrefix(cc.Argv[0], "/") {
+			return ErrSystemConfig
+		}
+	}
+	if c.StatusDir != "" && !strings.HasPrefix(c.StatusDir, "/") {
+		return ErrSystemConfig
+	}
+	if c.ScopeSync != nil {
+		if err := c.ScopeSync.validate(seen); err != nil {
+			return err
 		}
 	}
 	return nil

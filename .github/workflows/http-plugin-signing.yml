@@ -8,7 +8,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     uses: ThingsPanel/thingspanel-installer/.github/workflows/http-plugin-candidate.yml@3f5ac1ec4034a6879867be56e54c7c9d1798aa14
     with:
-      source_commit: 6925e0ea6b40305556fdb06d0af89b8e466d3169
+      source_commit: 314b4183aece619660476a1300b3963e088eb78f
       installer_commit: 3f5ac1ec4034a6879867be56e54c7c9d1798aa14
     secrets:
       TP_PLUGIN_CATALOG_SIGNING_KEY: ${{ secrets.TP_PLUGIN_CATALOG_SIGNING_KEY }}

@@ -1,55 +1,43 @@
 {
- "id": "homeassistant",
- "version": "1.0.0-t7c",
- "kind": "service",
- "description": "Home Assistant device connector: HA state_changed events become ThingsPanel telemetry, platform commands call HA services.",
- "image_id": "sha256:43984ca468277669bbd3df0b43dbf1cdea27d192f2e5bbbd2f576aba821bcdf9",
- "image_platform": "linux/arm64",
- "entrypoint": "/usr/local/bin/homeassistant-service",
- "args": [],
- "env": [
-  "CONNECTOR_SERVICE_IDENTIFIER=homeassistant",
-  "CONNECTOR_INSTANCE_ID=homeassistant-1",
-  "THINGSPANEL_BACKEND_URL=http://backend:9999",
-  "TP_MQTT_BROKER=tcp://mosquitto:1883",
-  "LOG_LEVEL=info"
- ],
- "env_from_stack": {
-  "TP_MQTT_USER": "TP_PROTOCOL_MQTT_USER",
-  "TP_MQTT_PASS": "TP_PROTOCOL_MQTT_PASSWORD"
- },
- "env_user": {
-  "HA_BASE_URL": {
-   "required": true,
-   "secret": false,
-   "description": "Home Assistant base URL, e.g. http://homeassistant.local:8123",
-   "validate": "url"
+  "id": "homeassistant",
+  "version": "1.0.0-candidate.20261106-4d8d45b-r2",
+  "kind": "service",
+  "description": "Home Assistant device connector: HA state_changed events become ThingsPanel telemetry, platform commands call HA services.",
+  "image_id": "sha256:0747be19506d38d110a61519964c0f5b6617886d5eb475b303a17ff1c8e6a21c",
+  "image_platform": "linux/arm64",
+  "image_archive_sha256": "5421f8ec4d62c5fabe4b5abd26312d5f13e9f4fe041fe0977dd932265e6bf220",
+  "entrypoint": "/usr/local/bin/homeassistant-service",
+  "args": [],
+  "env": [
+    "CONNECTOR_SERVICE_IDENTIFIER=homeassistant",
+    "CONNECTOR_INSTANCE_ID=homeassistant-1",
+    "THINGSPANEL_BACKEND_URL=http://backend:9999",
+    "TP_MQTT_BROKER=tcp://mosquitto:1883",
+    "LOG_LEVEL=info"
+  ],
+  "env_from_stack": {
+    "TP_MQTT_USER": "TP_PROTOCOL_MQTT_USER",
+    "TP_MQTT_PASS": "TP_PROTOCOL_MQTT_PASSWORD"
   },
-  "HA_ACCESS_TOKEN": {
-   "required": true,
-   "secret": true,
-   "description": "Home Assistant long-lived access token"
+  "health": {
+    "port": 9001,
+    "path": "/health"
+  },
+  "platform": {
+    "binding": "none",
+    "service_identifier": "homeassistant",
+    "http_port": 9001,
+    "service_plugin": {
+      "name": "Home Assistant",
+      "service_type": 2,
+      "description": "Home Assistant device connector (installed by the plugin installer)",
+      "config": {
+        "sub_topic_prefix": "plugin/homeassistant/",
+        "http_address": "{alias}:{http_port}"
+      }
+    }
+  },
+  "identity": {
+    "token_env": "TP_PLUGIN_RUNTIME_TOKEN"
   }
- },
- "health": {
-  "port": 9001,
-  "path": "/health"
- },
- "platform": {
-  "binding": "none",
-  "service_identifier": "homeassistant",
-  "http_port": 9001,
-  "service_plugin": {
-   "name": "Home Assistant",
-   "service_type": 2,
-   "description": "Home Assistant device connector (installed by the plugin installer)",
-   "config": {
-    "sub_topic_prefix": "plugin/homeassistant/",
-    "http_address": "{alias}:{http_port}"
-   }
-  }
- },
- "identity": {
-  "token_env": "TP_PLUGIN_RUNTIME_TOKEN"
- }
 }

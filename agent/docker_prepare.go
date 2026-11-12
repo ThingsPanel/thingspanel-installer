@@ -150,6 +150,7 @@ type dockerContainer struct {
 
 func preparationCreate(record containerPreparation, host string) dockerCreateRequest {
 	request := preparationCreateBase(record, host)
+	request.HostConfig.Mounts, request.HostConfig.Tmpfs = expectedMounts(record, host)
 	if alias := record.Profile.NetworkAlias; alias != "" {
 		request.NetworkingConfig = &dockerNetworkingConfig{EndpointsConfig: map[string]dockerEndpointConfig{record.Profile.Network: {Aliases: []string{alias}}}}
 	}

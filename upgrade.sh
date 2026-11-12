@@ -9,7 +9,7 @@ set -euo pipefail
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="ThingsPanel/thingspanel-installer"
 RAW_BASE="https://install.thingspanel.io"
-UPDATE_ENGINE_SHA256="b9644d456d83f090cd6972c63ebc2cc254948dd58d63840361f4856ccdd2b8c1"
+UPDATE_ENGINE_SHA256="f371cabfab4d2f5fbb37cc892e5b7e0cfbc9436b7a615d91da67ec341b1291aa"
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -51,6 +51,7 @@ PY
         fi
     fi
     local args=(--root "$INSTALL_DIR" --base-url "$RAW_BASE" --expected-version "$TARGET_VERSION")
+    if [ -n "${TP_PLUGIN_TRUST_ROOT:-}" ]; then args+=(--plugin-trust-root "$TP_PLUGIN_TRUST_ROOT"); fi
     # Signed releases: a trust root is supplied out of band (never from the payload).
     if [ -n "${TP_RELEASE_TRUST_ROOT:-}" ]; then args+=(--release-trust-root "$TP_RELEASE_TRUST_ROOT"); fi
     if [ "${TP_REQUIRE_SIGNED_RELEASE:-}" = "1" ]; then args+=(--require-signed-release); fi

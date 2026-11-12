@@ -27,7 +27,7 @@ $ErrorActionPreference = "Stop"
 
 $REPO     = "ThingsPanel/thingspanel-installer"
 $RAW_BASE = "https://install.thingspanel.io"
-$UPDATE_ENGINE_SHA256 = "b9644d456d83f090cd6972c63ebc2cc254948dd58d63840361f4856ccdd2b8c1"
+$UPDATE_ENGINE_SHA256 = "f371cabfab4d2f5fbb37cc892e5b7e0cfbc9436b7a615d91da67ec341b1291aa"
 
 function Write-Info    ($m) { Write-Host "[INFO]  $m" -ForegroundColor Cyan }
 function Write-Success ($m) { Write-Host "[OK]    $m" -ForegroundColor Green }
@@ -61,6 +61,7 @@ function Invoke-SafeUpdate($Directory, $ExpectedVersion) {
         }
         $arguments = $pythonArgs + @($engine, '--root', $Directory, '--base-url', $RAW_BASE)
         if ($ExpectedVersion) { $arguments += @('--expected-version', $ExpectedVersion) }
+        if ($env:TP_PLUGIN_TRUST_ROOT) { $arguments += @('--plugin-trust-root', $env:TP_PLUGIN_TRUST_ROOT) }
         # Signed releases: a trust root is supplied out of band (never from the payload).
         if ($env:TP_RELEASE_TRUST_ROOT) { $arguments += @('--release-trust-root', $env:TP_RELEASE_TRUST_ROOT) }
         if ($env:TP_REQUIRE_SIGNED_RELEASE -eq '1') { $arguments += @('--require-signed-release') }

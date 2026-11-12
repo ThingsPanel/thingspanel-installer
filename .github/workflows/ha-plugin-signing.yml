@@ -1,0 +1,20 @@
+name: Sign fixed Home Assistant plugin candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sign-candidate:
+    if: github.ref == 'refs/heads/main'
+    uses: ThingsPanel/thingspanel-installer/.github/workflows/ha-plugin-candidate.yml@1f2f5a96cf5617b468460634e0616d25e8fecafc
+    with:
+      version: 1.0.0
+      connector_commit: 0b3240e060def50e124495f478a79ea9d1809ab0
+      sdk_tag: v1.1.0
+      sdk_commit: fa39f24ea7bdcbe781029ec515713e7804250134
+      installer_commit: 1f2f5a96cf5617b468460634e0616d25e8fecafc
+    secrets:
+      TP_PLUGIN_CATALOG_SIGNING_KEY: ${{ secrets.TP_PLUGIN_CATALOG_SIGNING_KEY }}

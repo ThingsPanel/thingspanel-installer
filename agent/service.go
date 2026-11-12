@@ -60,13 +60,13 @@ type apiRequest struct {
 }
 
 type apiResponse struct {
-	OK          bool              `json:"ok"`
-	Error       string            `json:"error,omitempty"`
+	OK          bool                    `json:"ok"`
+	Error       string                  `json:"error,omitempty"`
 	Preparation *PreparationObservation `json:"preparation,omitempty"`
-	Activation  *ActivationRecord `json:"activation,omitempty"`
-	Stopped     []string          `json:"stopped,omitempty"`
-	Catalog     []PublicEntry     `json:"catalog,omitempty"`
-	Keys        []string          `json:"keys,omitempty"`
+	Activation  *ActivationRecord       `json:"activation,omitempty"`
+	Stopped     []string                `json:"stopped,omitempty"`
+	Catalog     []PublicEntry           `json:"catalog,omitempty"`
+	Keys        []string                `json:"keys,omitempty"`
 }
 
 func (s *Service) Handler() http.Handler {
@@ -76,6 +76,7 @@ func (s *Service) Handler() http.Handler {
 		"/v1/prepare":           s.prepare,
 		"/v1/grant":             s.grant,
 		"/v1/activate":          s.activate,
+		"/v1/renew":             s.renew,
 		"/v1/revoke":            s.revoke,
 		"/v1/retire":            s.retire,
 		"/v1/status":            s.status,
@@ -181,6 +182,11 @@ func (s *Service) grant(ctx context.Context, r apiRequest) (apiResponse, error) 
 	return apiResponse{Activation: &record}, err
 }
 
+func (s *Service) renew(_ context.Context, r apiRequest) (apiResponse, error) {
+	record, err := s.activator.Renew(r.Instance, r.Generation, r.RequestKey, r.GrantID, time.Duration(r.TTLSeconds)*time.Second)
+	return apiResponse{Activation: &record}, err
+}
+
 func (s *Service) activate(ctx context.Context, r apiRequest) (apiResponse, error) {
 	record, err := s.activator.Activate(ctx, r.Instance, r.Generation, r.RequestKey)
 	return apiResponse{Activation: &record}, err
@@ -220,7 +226,11 @@ func (s *Service) declaredSecret(instance, key string) error {
 	if s.catalog == nil || s.builder.Secrets == nil {
 		return ErrPreparationPolicy
 	}
-	entry, err := s.catalog.Entry(instance)
+	catalogID, installID := SplitInstance(instance)
+	if installID != "" && !validInstallID(installID) {
+		return ErrPreparationPolicy
+	}
+	entry, err := s.catalog.Entry(catalogID)
 	if err != nil {
 		return ErrPreparationPolicy
 	}

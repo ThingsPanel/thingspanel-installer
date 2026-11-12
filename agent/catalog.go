@@ -31,6 +31,20 @@ type CatalogUserField struct {
 	Default     string `json:"default,omitempty"`
 }
 
+// CatalogVolume declares one named volume. The catalog never names a host path or a Docker volume: the Agent derives
+// the volume identity from host + install instance + Key, so two tenants never share one.
+type CatalogVolume struct {
+	Key         string `json:"key"`
+	Destination string `json:"destination"`
+	Mode        string `json:"mode"` // "rw" or "ro"
+}
+
+// CatalogTmpfs declares a bounded writable scratch directory. It is never durable.
+type CatalogTmpfs struct {
+	Destination string `json:"destination"`
+	SizeMiB     int    `json:"size_mib"`
+}
+
 type CatalogServicePlugin struct {
 	Name        string            `json:"name"`
 	ServiceType int32             `json:"service_type"`
@@ -51,6 +65,8 @@ type CatalogEntry struct {
 	EnvFromStack map[string]string           `json:"env_from_stack"`
 	EnvGenerated map[string]int              `json:"env_generated"`
 	EnvUser      map[string]CatalogUserField `json:"env_user"`
+	Volumes      []CatalogVolume             `json:"volumes"`
+	Tmpfs        []CatalogTmpfs              `json:"tmpfs"`
 	Health       *struct {
 		Port int    `json:"port"`
 		Path string `json:"path"`
@@ -135,8 +151,22 @@ func (e CatalogEntry) validate() error {
 			return ErrCatalog
 		}
 	}
+	if !validStorage(e.Volumes, e.Tmpfs) {
+		return ErrCatalog
+	}
 	return nil
 }
+
+// SplitInstance separates a runtime instance into its catalog id and tenant install id. Catalog ids never contain
+// a dot, so "<catalog>.<install>" is unambiguous; a bare "<catalog>" is the legacy singleton install (no install id).
+func SplitInstance(instance string) (catalogID, installID string) {
+	catalogID, installID, _ = strings.Cut(instance, ".")
+	return
+}
+
+var installIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{7,62}[a-z0-9]$`)
+
+func validInstallID(id string) bool { return installIDPattern.MatchString(id) }
 
 // CatalogSource re-verifies the signed catalog file on every use, so a republished catalog takes effect without a
 // restart and a tampered or expired file is refused immediately.
@@ -218,9 +248,16 @@ type ProfileBuilder struct {
 }
 
 func (b ProfileBuilder) Build(e CatalogEntry, instance string, generation uint64, values map[string]string, token string) (PreparationProfile, error) {
-	if instance != e.ID || generation == 0 || token == "" || b.Secrets == nil {
+	catalogID, installID := SplitInstance(instance)
+	if catalogID != e.ID || generation == 0 || token == "" || b.Secrets == nil {
 		return PreparationProfile{}, ErrPreparationPolicy
 	}
+	if installID != "" && !validInstallID(installID) {
+		return PreparationProfile{}, ErrPreparationPolicy
+	}
+	// A volume belongs to the instance string (host + instance + key). Generation, secrets and state are keyed by that
+	// same string, so a bare "<catalog>" instance is exactly one install and gets exactly one volume. A control plane
+	// that runs several installs of one plugin must pass "<catalog>.<installID>" so each gets its own.
 	env := append([]string{}, e.Env...)
 	targets := make([]string, 0, len(e.EnvFromStack))
 	for t := range e.EnvFromStack {
@@ -289,6 +326,12 @@ func (b ProfileBuilder) Build(e CatalogEntry, instance string, generation uint64
 	env = append(env, e.tokenEnv()+"="+secretPrefix+fmt.Sprintf("identity/%d", generation), "TP_PLUGIN_SERVICE_IDENTIFIER="+e.ServiceIdentifier())
 	profile := PreparationProfile{Name: fmt.Sprintf("%s.g%d", e.ID, generation), ImageID: e.ImageID, Entrypoint: e.Entrypoint,
 		Args: append([]string{}, e.Args...), Network: b.Network, NetworkAlias: e.NetworkAlias(), Env: env, ReviewedImageMetadata: true}
+	for _, v := range e.Volumes {
+		profile.Mounts = append(profile.Mounts, PreparationMount{Key: v.Key, Destination: v.Destination, ReadOnly: v.Mode == "ro"})
+	}
+	for _, t := range e.Tmpfs {
+		profile.Tmpfs = append(profile.Tmpfs, PreparationTmpfs{Destination: t.Destination, SizeMiB: t.SizeMiB})
+	}
 	if !validPreparationProfile(profile) {
 		return PreparationProfile{}, ErrPreparationPolicy
 	}

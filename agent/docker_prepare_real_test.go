@@ -257,3 +257,64 @@ func TestPreparationRealDockerTwoProcessesAndSIGKILL(t *testing.T) {
 		})
 	}
 }
+
+// Real daemon: create-only with the generic storage declaration, then read back what Docker actually reports.
+func TestPreparationRealDockerNamedVolumeAndTmpfsReadback(t *testing.T) {
+	var volumes []string
+	t.Cleanup(func() { // registered first, so it runs after the container cleanup of the fixture
+		engine, err := NewUnixDockerEngine(os.Getenv("TP_AGENT_DOCKER_SOCKET"))
+		if err != nil {
+			return
+		}
+		for _, name := range volumes { // only volumes whose name this test derived from its own random host id
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			status, _ := engine.call(ctx, http.MethodDelete, "/volumes/"+name, nil, nil)
+			cancel()
+			if status != http.StatusNoContent {
+				t.Errorf("test volume %s not removed (status %d)", name, status)
+			}
+		}
+	})
+	store, path, engine, profile := realPreparationFixture(t)
+	host, err := store.HostID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := "matter." + tenantA
+	if err := store.AcceptGeneration(instance, 1); err != nil {
+		t.Fatal(err)
+	}
+	profile.Name = "storage-real"
+	profile.Mounts = []PreparationMount{{Key: "fabric", Destination: "/data"}}
+	profile.Tmpfs = []PreparationTmpfs{{Destination: "/tmp", SizeMiB: 16}}
+	volumes = append(volumes, volumeName(host, instance, "fabric"))
+	preparer, err := NewDockerPreparer(store, engine, []PreparationProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := preparer.Prepare(context.Background(), PrepareContainerRequest{Instance: instance, Generation: 1, RequestKey: "k", Profile: profile.Name})
+	if err != nil || observation.State != PreparationPrepared || observation.Active {
+		t.Fatalf("real Docker rejected its own declared storage: %#v %v", observation, err)
+	}
+	container, exists, err := engine.inspectContainer(context.Background(), observation.ContainerName)
+	if err != nil || !exists || container.State.Running {
+		t.Fatalf("exists=%v running=%v %v", exists, container.State.Running, err)
+	}
+	if len(container.Mounts) != 1 || len(container.HostConfig.Binds) != 0 || container.HostConfig.Tmpfs["/tmp"] == "" {
+		t.Fatalf("unexpected readback: mounts=%s tmpfs=%v", container.Mounts, container.HostConfig.Tmpfs)
+	}
+	t.Logf("real Docker readback: Mounts=%s HostConfig.Mounts=%s Tmpfs=%v", container.Mounts, container.HostConfig.Mounts, container.HostConfig.Tmpfs)
+	// The same ledger must stay prepared after a restart, i.e. the real readback keeps matching.
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := NewDockerPreparer(reopened, engine, []PreparationProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := again.Query(context.Background(), instance, 1, "k")
+	if err != nil || second.State != PreparationPrepared {
+		t.Fatalf("readback no longer matches after restart: %#v %v", second, err)
+	}
+}

@@ -1,0 +1,13 @@
+{
+  "project": "thingspanel",
+  "components": [
+    {"name": "postgres", "group": "data"},
+    {"name": "redis", "group": "data"},
+    {"name": "backend", "group": "control", "probe": "http", "url": "http://backend:9999/health"},
+    {"name": "encore-api", "group": "control", "probe": "http", "url": "http://encore-api:14000/__encore/healthz"},
+    {"name": "notification-core", "group": "control", "probe": "http", "url": "http://notification-core:18091/__encore/healthz"},
+    {"name": "automation-scheduler", "group": "control"},
+    {"name": "broker-owner", "group": "broker"},
+    {"name": "mosquitto", "group": "broker", "probe": "tcp", "addr": "mosquitto:1883"}
+  ]
+}

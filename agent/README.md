@@ -186,3 +186,23 @@ image's own exposed-port and environment declarations; volumes, labels and OnBui
 nothing is ever published). All three default to off, so existing profiles and ledgers are unchanged.
 The profiles file holds secrets and must be mode 0600. `tp-agentctl` posts one request to the socket
 (`tp-agentctl -socket S -token-file F /v1/status instance=x generation=1`).
+
+## System role (R1)
+
+`tp-agent` can serve a second, isolated API: the **system role**. It is off unless all of `-system-socket`,
+`-system-token-file` and `-system-config` are given. It has its own Unix socket and its own bearer token
+(the two tokens must differ, checked at start), and it is a separate `http.Handler` from the plugin role: the
+plugin socket serves no `/v1/system/*` route and rejects the system token; the system socket rejects the plugin
+token. **Never mount the system socket into the platform backend container.**
+
+Fixed actions only (R1): `/v1/system/status` and `/v1/system/verify` (`wait_seconds`, 0..600). A request cannot
+name a command, image, URL or compose argument; everything it may touch is read from the system config
+(`system-config.example.json`), which must not be writable by group or others. Verify checks every component of
+the compose project (found, running, Docker health, plus an optional fixed HTTP or TCP probe) and reports every
+failing component with a fixed reason code. Probe URLs are resolved from where the Agent runs, so the Agent must
+be on the stack's Docker network for `http://backend:9999/...` style probes.
+
+```sh
+tp-agentctl -socket SYSTEM.sock -token-file system.token system status
+tp-agentctl -socket SYSTEM.sock -token-file system.token system verify wait_seconds=300   # exit 0 = healthy
+```

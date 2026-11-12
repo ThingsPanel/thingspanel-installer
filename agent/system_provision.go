@@ -50,7 +50,7 @@ func ProductionSystemConfig(project string) SystemConfig {
 			KeepAuto: 3,
 		},
 		ScopeSync: &ScopeSyncConfig{
-			URL: "http://backend:9999/internal/broker-scope", EnvFile: ContainerStackRoot + "/.env", TokenKey: "TP_BROKER_SCOPE_TOKEN",
+			URL: "http://encore-api:14000/internal/broker-scope", EnvFile: ContainerStackRoot + "/.env", TokenKey: "TP_BROKER_SCOPE_TOKEN",
 			Root: ContainerStackRoot, OwnerService: "broker-owner", BrokerService: "mosquitto", IntervalSeconds: 20,
 		},
 	}

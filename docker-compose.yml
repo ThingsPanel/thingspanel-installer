@@ -316,6 +316,15 @@ services:
       TP_COMMUNITY_BASE_URL: http://backend:9999
       TP_COMMUNITY_SESSION_BASE_URL: http://backend:9999
       TP_AUTOMATION_SERVICE_TOKEN: ${TP_AUTOMATION_TOKEN:?set in .env}
+      # Bearer token of GET /internal/broker-scope, read by the Agent's system role. Empty = the route does not exist.
+      GOTP_BROKER_SCOPE_TOKEN: ${TP_BROKER_SCOPE_TOKEN:-}
+      # The brokerscope service reads the platform database (read-only queries) through pkg/relational.
+      TP_RELATIONAL_DRIVER: postgres
+      TP_RELATIONAL_POSTGRES_PLATFORM_HOST: postgres
+      TP_RELATIONAL_POSTGRES_PLATFORM_PORT: '5432'
+      TP_RELATIONAL_POSTGRES_PLATFORM_DATABASE: ThingsPanel
+      TP_RELATIONAL_POSTGRES_PLATFORM_USERNAME: postgres
+      TP_RELATIONAL_POSTGRES_PLATFORM_PASSWORD: ${TP_DATABASE_PASSWORD:-postgresThingsPanel}
       TP_SOURCE_DEPLOYMENT_ID: ${TP_DEPLOYMENT_ID:-community}
       DB_DEVICE_METADATA_PASSWORD: ${TP_NATIVE_DB_PASSWORD:?set in .env}
       DB_AUTOMATION_PASSWORD: ${TP_NATIVE_DB_PASSWORD:?set in .env}

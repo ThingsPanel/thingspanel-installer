@@ -81,6 +81,8 @@ def provision_system(args, agent_dir, project):
         provision += ['-release-source', args.release_source, '-release-trust-root', '/run/agent/release-root.pem',
                       '-host-root', str(Path(args.stack_dir).resolve())]
         release_mounts += ['-v', '%s:/run/agent/release-root.pem:ro' % Path(args.release_trust_root).resolve()]
+        if args.compose_image:
+            provision += ['-compose-image', args.compose_image]
         if args.release_ca:
             provision += ['-release-ca', '/run/agent/release-ca.pem']
             release_mounts += ['-v', '%s:/run/agent/release-ca.pem:ro' % Path(args.release_ca).resolve()]
@@ -163,10 +165,13 @@ def main():
                         help='also serve the system role (restart/backup/restore/upgrade) and let the Agent do the Broker scope sync')
     parser.add_argument('--release-source', help='with --system: HTTPS base URL of the signed release; enables `system upgrade`')
     parser.add_argument('--release-trust-root', help='with --release-source: PEM public key that must have signed the release')
+    parser.add_argument('--compose-image', help='with --release-source: image that runs docker compose during `system upgrade` (default docker:27-cli)')
     parser.add_argument('--release-ca', help='with --release-source: extra CA bundle (PEM) for the release source')
     parser.add_argument('--defer-scope-watcher', action='store_true',
                         help='installer owns the update lock and will start the watcher after activation')
     args = parser.parse_args()
+    if args.compose_image and not args.release_source:
+        parser.error('--compose-image needs --release-source')
     if args.command == 'up' and not all([args.agent_dir, args.agent_bin, args.catalog, args.trust_root]):
         parser.error('up needs --agent-dir, --agent-bin, --catalog and --trust-root')
     try:

@@ -11,7 +11,7 @@
 set -eu
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
-RAW_BASE="https://install.thingspanel.io"
+RAW_BASE="${RAW_BASE:-https://install.thingspanel.io}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/thingspanel}"
 HTTP_PORT="${HTTP_PORT:-8080}"
 MQTT_PORT="${MQTT_PORT:-1883}"
@@ -185,6 +185,11 @@ PY
     # Signed releases: a trust root is supplied out of band (never from the payload).
     if [ -n "${TP_RELEASE_TRUST_ROOT:-}" ]; then args+=(--release-trust-root "$TP_RELEASE_TRUST_ROOT"); fi
     if [ "${TP_REQUIRE_SIGNED_RELEASE:-}" = "1" ]; then args+=(--require-signed-release); fi
+    # In-platform "check for updates / upgrade": where the signed release lives (never a built-in default).
+    if [ -n "${TP_RELEASE_SOURCE:-}" ]; then args+=(--release-source "$TP_RELEASE_SOURCE"); fi
+    if [ -n "${TP_RELEASE_CA:-}" ]; then args+=(--release-ca "$TP_RELEASE_CA"); fi
+    if [ -n "${TP_UPGRADE_HELPER_IMAGE:-}" ]; then args+=(--upgrade-helper-image "$TP_UPGRADE_HELPER_IMAGE"); fi
+    if [ "${TP_REPLACE_RELEASE_TRUST_ROOT:-}" = "1" ]; then args+=(--replace-release-trust-root); fi
     if [ -n "${TP_REVOKED_VERSIONS:-}" ]; then
         for revoked in ${TP_REVOKED_VERSIONS//,/ }; do args+=(--revoked-version "$revoked"); done
     fi

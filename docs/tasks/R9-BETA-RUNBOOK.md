@@ -48,12 +48,17 @@ export RAW_BASE=<SOURCE>                         # 安装包从这里取（默�
 export TP_VERSION=vX.Y.Z-beta.N
 export TP_RELEASE_TRUST_ROOT=/abs/path/release-beta.pem   # 校验安装包签名，同时成为平台内升级的信任根
 export TP_RELEASE_SOURCE=<SOURCE>                # 不设则平台内“检查更新”显示“未配置发布源”
+export TP_BUNDLE_PAGES_BASE=<SOURCE>             # 新装机器的 Agent/插件 bundle 也从 beta 发布源取（目录在 <SOURCE>/plugins/catalog-linux-<arch>.json）
+export TP_BUNDLE_RELEASE_BASE=<ASSETS>           # 其下 <release_tag>/tp-agent-linux-<arch> 与 ha-image-linux-<arch>.tar；两个变量必须同时设置，均为 https
+export TP_PLUGIN_TRUST_ROOT=/abs/plugin-test.pem # beta 目录用测试插件密钥签名时的插件信任根
 bash install.bash                                # 安装器仓库里与本次发布同一提交的 install.bash（它不在签名清单里，但内部固定了 updater 摘要）
 ```
 
 * 信任根文件必须在安装目录**之外**。updater 会把它复制到 `<安装目录>/.tp-agent/release/` 并记下 SHA-256；以后不必再设，除非要换（§7）。
 * 私有 CA：`TP_RELEASE_CA=/abs/ca.pem`。离线/内网：`TP_UPGRADE_HELPER_IMAGE=<内网镜像>`，或按 §4 离线导入。
 * `.env` 里写 `TP_RELEASE_SOURCE=`/`TP_UPGRADE_HELPER_IMAGE=` 也可（优先级低于环境变量）。
+* 只有**全新安装**会下载 bundle；已有机器不会更换 Agent。beta 测试请用全新机器。
+* 创建设备后立即跑 `upgrade.sh` 若撞上 Broker 范围同步，updater 会自动等待重试。
 * **GitHub “latest release” 不包含预发布**：用 `upgrade.sh` 时必须显式写版本：`./upgrade.sh vX.Y.Z-beta.N`。
 * 已有机器改配置/刷新 Agent：同一组环境变量再跑一次 `./upgrade.sh <当前版本>`（幂等，token 保留；Agent 以当前二进制重建，`system.json` 重新生成）。
 

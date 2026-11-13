@@ -274,3 +274,36 @@ class FreshInstallPrepareGuard(unittest.TestCase):
         env['GOTP_RELATIONAL_POSTGRES_PLATFORM_DATABASE'] = '${DB}'
         with self.assertRaises(RuntimeError):
             prepare.validate_supported_backend_database(config)
+
+
+class BundleMirror(unittest.TestCase):
+    """R9: a beta (or mirror) can serve its own plugin bundle; the default stays pinned to the official locations."""
+
+    def test_default_bases_stay_pinned_and_custom_ones_need_the_flag(self):
+        sys_path = str(REPO / 'tools')
+        import sys
+        sys.path.insert(0, sys_path)
+        import plugin_bundle
+        with self.assertRaises(plugin_bundle.PluginBundleError):
+            plugin_bundle._validate_https_base('https://beta.example.test/p')
+        with self.assertRaises(plugin_bundle.PluginBundleError):
+            plugin_bundle._validate_https_base('https://beta.example.test/r', release=True)
+        self.assertEqual(plugin_bundle._validate_https_base('https://beta.example.test/p/', custom=True), 'https://beta.example.test/p')
+        with self.assertRaises(plugin_bundle.PluginBundleError):
+            plugin_bundle._validate_https_base('http://beta.example.test/p', custom=True)   # https is never optional
+        with self.assertRaises(plugin_bundle.PluginBundleError):
+            plugin_bundle._validate_https_base('https://u:p@beta.example.test/p', custom=True)
+
+    def test_bases_are_saved_validated_and_remembered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'install'
+            root.mkdir()
+            update.configure_release_settings(root, bundle_pages_base='https://beta.example.test/release',
+                                              bundle_release_base='https://beta.example.test/assets/')
+            saved = update.load_release_settings(root)
+            self.assertEqual(saved['bundle_pages_base'], 'https://beta.example.test/release')
+            self.assertEqual(saved['bundle_release_base'], 'https://beta.example.test/assets')
+            update.configure_release_settings(root)       # remembered
+            self.assertEqual(update.load_release_settings(root)['bundle_pages_base'], 'https://beta.example.test/release')
+            with self.assertRaises(update.UpdateError):
+                update.configure_release_settings(root, bundle_pages_base='http://plain.example.test')

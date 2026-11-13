@@ -18,7 +18,7 @@ $REPO          = "ThingsPanel/thingspanel-installer"
 $RAW_BASE      = if ($env:RAW_BASE) { $env:RAW_BASE } else { "https://install.thingspanel.io" }
 $INSTALL_DIR   = "C:\ThingsPanel"
 $MIN_DOCKER_VER = "20.10"
-$UPDATE_ENGINE_SHA256 = "e2af97e874039bc0b03736f12b066491d644bf7723e57fcfbb24663ddc7a12af"
+$UPDATE_ENGINE_SHA256 = "0bb38cd027b98a2f1bdc32113f45612a89467f230914f5d300e8b1c3ed071d41"
 
 function Write-Info    ($m) { Write-Host "[INFO]  $m" -ForegroundColor Cyan }
 function Write-Success ($m) { Write-Host "[OK]    $m" -ForegroundColor Green }
@@ -60,6 +60,8 @@ function Invoke-SafeUpdate($Directory, $ExpectedVersion) {
         if ($env:TP_RELEASE_CA) { $arguments += @('--release-ca', $env:TP_RELEASE_CA) }
         if ($env:TP_UPGRADE_HELPER_IMAGE) { $arguments += @('--upgrade-helper-image', $env:TP_UPGRADE_HELPER_IMAGE) }
         if ($env:TP_REPLACE_RELEASE_TRUST_ROOT -eq '1') { $arguments += @('--replace-release-trust-root') }
+        if ($env:TP_BUNDLE_PAGES_BASE) { $arguments += @('--bundle-pages-base', $env:TP_BUNDLE_PAGES_BASE) }
+        if ($env:TP_BUNDLE_RELEASE_BASE) { $arguments += @('--bundle-release-base', $env:TP_BUNDLE_RELEASE_BASE) }
         if ($env:TP_REVOKED_VERSIONS) { foreach ($revoked in ($env:TP_REVOKED_VERSIONS -split '[,\s]+' | Where-Object { $_ })) { $arguments += @('--revoked-version', $revoked) } }
         & $python.Source @arguments
         if ($LASTEXITCODE -ne 0) { throw 'Installation did not complete. Preserve .thingspanel-update for recovery.' }

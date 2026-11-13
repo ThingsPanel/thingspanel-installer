@@ -17,7 +17,7 @@ HTTP_PORT="${HTTP_PORT:-8080}"
 MQTT_PORT="${MQTT_PORT:-1883}"
 MIN_DOCKER_VERSION="20.10"
 SUDO_CMD=""
-UPDATE_ENGINE_SHA256="e2af97e874039bc0b03736f12b066491d644bf7723e57fcfbb24663ddc7a12af"
+UPDATE_ENGINE_SHA256="0bb38cd027b98a2f1bdc32113f45612a89467f230914f5d300e8b1c3ed071d41"
 
 # ── 颜色输出 ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
@@ -190,6 +190,8 @@ PY
     if [ -n "${TP_RELEASE_CA:-}" ]; then args+=(--release-ca "$TP_RELEASE_CA"); fi
     if [ -n "${TP_UPGRADE_HELPER_IMAGE:-}" ]; then args+=(--upgrade-helper-image "$TP_UPGRADE_HELPER_IMAGE"); fi
     if [ "${TP_REPLACE_RELEASE_TRUST_ROOT:-}" = "1" ]; then args+=(--replace-release-trust-root); fi
+    if [ -n "${TP_BUNDLE_PAGES_BASE:-}" ]; then args+=(--bundle-pages-base "$TP_BUNDLE_PAGES_BASE"); fi
+    if [ -n "${TP_BUNDLE_RELEASE_BASE:-}" ]; then args+=(--bundle-release-base "$TP_BUNDLE_RELEASE_BASE"); fi
     if [ -n "${TP_REVOKED_VERSIONS:-}" ]; then
         for revoked in ${TP_REVOKED_VERSIONS//,/ }; do args+=(--revoked-version "$revoked"); done
     fi

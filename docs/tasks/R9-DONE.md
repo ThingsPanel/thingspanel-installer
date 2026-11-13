@@ -31,6 +31,7 @@ e0c6ea6 installer: release source, pinned trust root and upgrade helper image fl
 - 保存到 `<安装目录>/.tp-agent/release/`（0700）：`settings.json`、信任根副本、CA 副本，记录 SHA-256。信任根只来自带外文件（必须在安装目录外、P-256 公钥）；换成不同文件必须 `TP_REPLACE_RELEASE_TRUST_ROOT=1`；磁盘副本被改动 → 拒绝重新配置，且 Agent 启动时不启用升级。配置事务**之前**校验，失败则什么都不改。
 - 没配置发布源：Agent 无 upgrade 配置，`system updates` 返回 `updates_not_configured`（"update check is not enabled"）——真实验收里见到。
 - 正式信任根：`update.py` 里预留常量 `OFFICIAL_RELEASE_TRUST_PEM`（目前为空）。切换办法见 runbook §7。
+- 新增 `TP_BUNDLE_PAGES_BASE`/`TP_BUNDLE_RELEASE_BASE`（见“已替负责人做出的决定”第 2 条）和 updater 对 services.json 竞争的重试（第 6 条）；这两处只有单元测试。
 - 新增一个入口环境变量 `RAW_BASE`：`install.bash`/`upgrade.sh`/两个 ps1 现在与 `install.sh` 一样允许覆盖安装包来源（默认值不变）。**没有它，beta 无法从自己的发布源安装**。
 - 受钉扎 helper 的摘要：已有的 `PLUGIN_HELPER_PROFILES` **在开始前就与仓库不符**（`plugin_catalog.py` 被后来的提交改过、`agent_host.py` 被 R6 改过都没更新钉），导致 `tests/test_plugin_bundle_activation.py` 7 个测试失败，**也意味着照仓库当前内容发布的安装包无法暂存插件 bundle（Agent 起不来）**。本卡在 `agent_host.py` 之后新增了最前面的 profile（当前文件摘要）并更新四个入口的 `UPDATE_ENGINE_SHA256`；所有 187 个 Python 测试通过（之前 7 个失败）。以后每次改这些文件都要重钉（见 UPDATE-SAFETY）。
 
@@ -73,19 +74,24 @@ install/upgrade 每次都在 `start_plugin_agent` 里重跑 `agent_host.py up --
 ## 发现的问题（已修 / 待办）
 
 1. **已修：全新安装根本过不了 updater 校验。** 没有 `.env` 时 Compose 无法插值，updater 与 `prepare.py` 的 PostgreSQL 守卫拿未插值的文件检查，`GOTP_RELATIONAL_POSTGRES_PLATFORM_PASSWORD` 的 `${TP_DATABASE_PASSWORD:-…}` 被当成“未解析”而拒绝（`Cannot confirm supported PostgreSQL backend…`）。已改为密码字段允许引用，端点字段仍须是字面值；两处都有回归测试（含用仓库真实 `docker-compose.yml`）。这是交接文档 B6“没在全新机器装过”的真实答案：**修之前装不上**。
-2. **待办：安装器事务与 Agent 的 Broker 范围同步竞争 `config/native/broker/services.json`。** 创建设备后几秒内跑 `upgrade.sh`，updater 报 `Install configuration changed during update: config/native/broker/services.json` 并中止（配置未改，重试即可）。Agent 的范围同步每 20 秒可能改写这个被 updater 监视的文件。
+2. **已缓解（自动重试，只有单元之外未实测）：安装器事务与 Agent 的 Broker 范围同步竞争 `config/native/broker/services.json`。** 创建设备后几秒内跑 `upgrade.sh`，updater 报 `Install configuration changed during update: config/native/broker/services.json` 并中止（配置未改，重试即可）。Agent 的范围同步每 20 秒可能改写这个被 updater 监视的文件。
 3. **待办（后端/前端）**：新错误码 `upgrade_helper_image_unavailable` 需要在 Encore `system` 的错误映射和前端码表里加说明文字（我没改后端/前端，也没检查它们是否会把未知码显示成通用错误）。
 4. `prepare.py --verify` 硬编码检查 `127.0.0.1:19091` 和 `:503`；同机有其他栈占用 503 时检查会假阳性。（验收里就是这样，不改。）
 5. 升级失败回退最坏约 339 秒（已知，交接文档 §5.6）。
 
-## 需要负责人决定
+## 已替负责人做出的决定（负责人授权按最佳实践执行，可随时推翻）
 
-1. **正式版“不重新构建”做不到**：后端 `--version` 是编译期注入（`-X …SYSTEM_VERSION`），所以 beta 镜像直接加正式版标签后 `--version` 仍是 beta 号，Agent 会认为版本没变。要做到“同一批构建提升为正式版”，需要后端支持运行时提供版本号（例如环境变量覆盖 `--version`），属于后端改动；否则正式版必须重编后端二进制（其余镜像可复用）。runbook §1 已写明。
-2. **Agent 如何随 beta 发到机器上**：现行 bundle 只在“没有 active bundle”时下载，地址写死为官方站/GitHub Release。要让 beta 带新 Agent，要么让 bundle 流程跟 `RAW_BASE`/发布源走并支持替换 active bundle，要么 beta 测试机手工放置 bundle。
-3. **谁签发布清单、beta 与正式是否同一把钥匙**；`OFFICIAL_RELEASE_TRUST_PEM` 何时填。
-4. **插件目录/镜像分发的约定**：发布源上的目录路径（我沿用现有 `plugins/catalog-linux-<arch>.json`）、非 HA 条目的镜像归档放哪里和怎么命名（目录条目只有 `image_id`，现有设计只为 HA 定义了归档地址）、目录要求新 Agent/新 HA 镜像时走什么流程、是否在 install/upgrade 里自动同步（现在是显式命令）。
-5. 收紧后的版本规则是否接受（`-rc`、`-dev` 之类不再可比较）。
-6. 是否要让 install/upgrade 对问题 2（services.json 竞争）自动重试。
+1. **正式版 = 同一批构建提升，不重新构建（目标做法）；过渡期重编后端二进制。** 行业做法是“一次构建、逐级提升”。要真正做到，需要**后端**支持运行时给出版本号（建议：`ThingsPanel-Go --version` 优先读环境变量 `TP_VERSION_OVERRIDE`，由 Compose 的 `backend` 服务注入 `${TP_VERSION:-…}`；Encore/前端/Agent 镜像本来就不含版本号逻辑）。这是后端仓库的改动，我没有做，**需求已写在这里**，请开后端卡。在它落地前：beta 通过后，用**同一提交**只重编后端二进制并打正式标签，其余镜像直接加标签复用（runbook §1、§6）。
+2. **beta 机器的 Agent 随发布源下发**：新增 `TP_BUNDLE_PAGES_BASE` / `TP_BUNDLE_RELEASE_BASE`（必须同时设置，https），让插件 bundle（目录、Agent 二进制、HA 镜像包）从 beta 发布源取，不污染正式站和正式 GitHub Release。完整性不依赖主机：目录必须通过**已钉扎的插件信任根**验签，所有摘要来自该目录。默认仍是写死的官方地址，行为不变。仍然只在“机器没有 active bundle”时下载（新装机器）；已有机器换 Agent 需要新的 bundle，没有命令做这件事——beta 阶段让测试机用**全新安装**，正式阶段由 B2 发布新的官方 bundle 后新装。已有机器原地换 Agent 作为后续卡（不在 beta 范围）。
+3. **密钥**：beta 用独立测试密钥；正式版由发布负责人离线生成另一把，公钥填 `OFFICIAL_RELEASE_TRUST_PEM`；beta 机器用 `TP_REPLACE_RELEASE_TRUST_ROOT=1` 切换（runbook §7）。beta 与正式不共用密钥。
+4. **插件目录**：沿用 `plugins/catalog-linux-<arch>.json(.sig)` 路径；非 HA 条目的镜像本期通过 `--image-dir` 离线导入或事先在机器上准备（不发明发布源上的镜像归档布局）；需要换 Agent/HA 镜像包的目录视为“新 bundle”，不走同步；同步保持显式命令，不放进 install/upgrade（避免一次升级顺带改变插件目录）。
+5. **版本规则收紧**（`-rc`、`-dev` 不可比较）接受：宁可拒绝也不猜。
+6. **services.json 竞争**：updater 遇到这个特定的“配置期间被改”错误时自动等待 25 秒重试，最多 3 次（此时尚未改动任何文件）。
+
+## 仍需要人做（不是决定，是动作）
+- 后端：支持运行时版本号（上面第 1 条）；Encore `system` 错误映射和前端码表补 `upgrade_helper_image_unavailable` 的文字；合并 `wp/R8-ci-services`。
+- 发布负责人：生成 beta 测试密钥并保管；决定 beta 发布源地址；准备带 `system` 角色的 Agent 二进制与插件目录/bundle（B2）。
+- 验证：用 runbook 在一台**全新机器**上用 beta 发布源走一遍（包括 `TP_BUNDLE_*` 路径——这条路径本卡只有单元测试，没有真实验收）。
 
 ## 没动的
 后端与前端仓库（只读检查）；`/api/system/*` 返回格式没有需求变更，只需要上面第 3 条的码表。

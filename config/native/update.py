@@ -21,6 +21,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import urlsplit
 import uuid
 import urllib.request
@@ -69,7 +70,7 @@ HwERLCSb0Ng2n3l4djp5nlaxGQdYZFcwGZJ0UhdPyohfgnwpGnu6eZKicw==
 # catalog-sync command and brings plugin_catalog.py/agent_host.py in line with the repository. Older profiles are kept.
 PLUGIN_HELPER_PROFILES = ({
 # R9 profile (current helpers)
-    'tools/plugin_bundle.py': 'a8fa326430c7433b20dc2cc699b115063be5e498a6a45f533dcf395a34a0ecfa',
+    'tools/plugin_bundle.py': 'e69e28a25cc8231ff6d8425c6e555ef9b05781e0fe37d669483ba21fe1b96504',
     'tools/plugin_catalog.py': 'cdb87bf24681cbde47ba2142d43864b1f33296fb5012c87ee6b78b2fbd1454b7',
     'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',
     'tools/agent_host.py': 'db9e8391e645bbab132a3bbcdf02b072715391751a6357f310820d5ca94771cc',
@@ -1069,7 +1070,14 @@ def prepare_optional_plugin(root, supplied_trust_root=None, *, allow_download=Fa
             if info is None or info['sha256'] != digest:
                 raise UpdateError('Downloaded plugin helper does not match the installer pin: ' + relative)
         helpers = load_plugin_helpers(helper_root)
-        staged = helpers.stage_plugin_bundle(platform, trust_root=trust, stage_parent=parent)
+        extra = {}
+        saved = load_release_settings(root)
+        if saved.get('bundle_pages_base') or saved.get('bundle_release_base'):
+            if not (saved.get('bundle_pages_base') and saved.get('bundle_release_base')):
+                raise UpdateError('TP_BUNDLE_PAGES_BASE and TP_BUNDLE_RELEASE_BASE must be set together')
+            extra = {'pages_base_url': saved['bundle_pages_base'], 'release_base_url': saved['bundle_release_base'], 'custom_bases': True}
+            print('Plugin bundle comes from the configured mirror: %s' % saved['bundle_pages_base'], flush=True)
+        staged = helpers.stage_plugin_bundle(platform, trust_root=trust, stage_parent=parent, **extra)
         bundle = helpers.arrange_staged_bundle(staged)
         # Move only the helper files we just downloaded and pinned; no active bundle is touched.
         for relative in PLUGIN_HELPER_PROFILES[0]:
@@ -1358,7 +1366,8 @@ def read_supplied_pem(path, root, label, *, public_key):
     return data
 
 
-def configure_release_settings(root, *, source='', trust_root='', ca='', helper_image='', replace=False):
+def configure_release_settings(root, *, source='', trust_root='', ca='', helper_image='', replace=False,
+                               bundle_pages_base='', bundle_release_base=''):
     """Resolve, validate and persist where the host Agent finds signed releases.
 
     Precedence per value: argument/environment, then the installation's .env, then what was saved last time.
@@ -1380,6 +1389,12 @@ def configure_release_settings(root, *, source='', trust_root='', ca='', helper_
     image = helper_image or dotenv_value(root, 'TP_UPGRADE_HELPER_IMAGE') or saved.get('helper_image', '')
     result['helper_image'] = validate_image_ref(image, 'TP_UPGRADE_HELPER_IMAGE') if image else ''
 
+    # Optional mirror/beta locations of the plugin bundle (catalog + Agent binary + HA image archive). Integrity never depends
+    # on these hosts: the catalog must verify against the pinned plugin trust root and all digests come from it.
+    for key, supplied_base, env_key in (('bundle_pages_base', bundle_pages_base, 'TP_BUNDLE_PAGES_BASE'),
+                                        ('bundle_release_base', bundle_release_base, 'TP_BUNDLE_RELEASE_BASE')):
+        value = supplied_base or dotenv_value(root, env_key) or saved.get(key, '')
+        result[key] = validate_release_source(value) if value else ''
     files = {}   # copy name -> bytes to write
     for key, copy, supplied, label, is_key in (
             ('trust_sha256', RELEASE_TRUST_COPY, trust_root or dotenv_value(root, 'TP_RELEASE_TRUST_ROOT'),
@@ -1591,6 +1606,8 @@ def main():
                         help='https:// base URL of the signed release the in-platform upgrade reads (default: none, upgrade off)')
     parser.add_argument('--release-ca', default='', help='extra CA bundle (PEM) for --release-source')
     parser.add_argument('--upgrade-helper-image', default='', help='image that runs docker compose during an in-platform upgrade')
+    parser.add_argument('--bundle-pages-base', default='', help='https:// base serving plugins/catalog-linux-<arch>.json(.sig) for the plugin bundle (default: the official site)')
+    parser.add_argument('--bundle-release-base', default='', help='https:// base serving <release_tag>/tp-agent-linux-<arch> and ha-image-linux-<arch>.tar (default: the official GitHub Releases)')
     parser.add_argument('--sync-plugin-catalog', action='store_true',
                         help='fetch the newer signed plugin catalog from the release source and have its images present; changes nothing else')
     parser.add_argument('--image-dir', default='', help='with --sync-plugin-catalog: directory with <id>-linux-<arch>.tar image archives')
@@ -1616,7 +1633,8 @@ def main():
         if not args.recover_config_only:
             configure_release_settings(args.root, source=args.release_source, trust_root=args.release_trust_root,
                                        ca=args.release_ca, helper_image=args.upgrade_helper_image,
-                                       replace=args.replace_release_trust_root)
+                                       replace=args.replace_release_trust_root, bundle_pages_base=args.bundle_pages_base,
+                                       bundle_release_base=args.bundle_release_base)
         transaction = Transaction(args.root, release_policy=policy)
         if args.reconcile_activation:
             agent_started = transaction.reconcile_activation(args.plugin_trust_root or None, enable_plugin_bundle=True)
@@ -1634,10 +1652,20 @@ def main():
                 print('[WARN] ThingsPanel recovery completed, but the HA plugin Agent is not active. Fix the plugin or host issue and re-run the installer.', file=sys.stderr)
                 return 2
             return 0
-        agent_started = transaction.run(args.base_url, expected_version=args.expected_version,
-                        activate=lambda install_root: activate_native(install_root, args.plugin_trust_root or None,
-                                                                     enable_plugin_bundle=True, source=args.base_url),
-                        recovery_only=args.recover_config_only)
+        for attempt in range(4):
+            try:
+                agent_started = transaction.run(args.base_url, expected_version=args.expected_version,
+                                activate=lambda install_root: activate_native(install_root, args.plugin_trust_root or None,
+                                                                             enable_plugin_bundle=True, source=args.base_url),
+                                recovery_only=args.recover_config_only)
+                break
+            except UpdateError as error:
+                # The Agent's Broker scope sync rewrites config/native/broker/services.json (every <=20 s after a device
+                # change). The transaction refuses to start on a changed watched input and has changed nothing yet, so wait and retry.
+                if attempt == 3 or str(error) != 'Install configuration changed during update: config/native/broker/services.json':
+                    raise
+                print('The Broker scope sync touched services.json; retrying in 25 s (%d/3).' % (attempt + 1), flush=True)
+                time.sleep(25)
         if not args.recover_config_only and not agent_started:
             print('[WARN] ThingsPanel core is running, but the HA plugin Agent is not active. Fix the reported plugin or host issue and re-run the installer.', file=sys.stderr)
             return 2

@@ -44,11 +44,14 @@ const (
 
 // Codes shown to the user.
 const (
-	CodeUpgradeBadVersion  = "upgrade_bad_version"
-	CodeUpgradeNotNewer    = "upgrade_not_newer"
-	CodeUpgradeUnresolved  = "upgrade_unresolved"
-	CodeUpgradeBusy        = "upgrade_busy"
-	CodeUpgradePreflight   = "upgrade_preflight_failed"
+	CodeUpgradeBadVersion = "upgrade_bad_version"
+	CodeUpgradeNotNewer   = "upgrade_not_newer"
+	CodeUpgradeUnresolved = "upgrade_unresolved"
+	CodeUpgradeBusy       = "upgrade_busy"
+	CodeUpgradePreflight  = "upgrade_preflight_failed"
+	// CodeUpgradeHelperImage: the image that runs `docker compose` for the upgrade is not on this host and could
+	// not be pulled (offline). Nothing was changed. Import it with `docker load` (see UPGRADE-HELPER-IMAGE in the log).
+	CodeUpgradeHelperImage = "upgrade_helper_image_unavailable"
 	CodeUpgradeRelease     = "upgrade_release_rejected"
 	CodeUpgradeSnapshot    = "upgrade_snapshot_failed"
 	CodeUpgradeApply       = "upgrade_apply_failed"
@@ -247,7 +250,12 @@ func (u *Upgrader) Run(ctx context.Context, to string, report func(step string, 
 		return u.abort(ctx, s, code, false)
 	}
 	if err := u.Steps.Preflight(ctx, to); err != nil {
-		return u.abort(ctx, s, CodeUpgradePreflight, false)
+		code := CodeUpgradePreflight
+		var ce CodedError
+		if errors.As(err, &ce) && ce.Code == CodeUpgradeHelperImage {
+			code = ce.Code
+		}
+		return u.abort(ctx, s, code, false)
 	}
 	if err := u.save(s, UpStaging); err != nil {
 		return u.abort(ctx, s, CodeUpgradePreflight, false)

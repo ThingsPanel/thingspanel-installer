@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -48,10 +49,16 @@ const (
 	StepRollingBack     = "rolling_back"
 )
 
-var versionPattern = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+].*)?$`)
+// versionPattern accepts vX.Y.Z, optionally followed by one pre-release tag of the form -beta.N and/or +build
+// metadata (ignored, as in semver). Any other suffix (-rc.1, -dev, -dirty, ...) is deliberately not parsed: such
+// a version is comparable only for string equality, so a restore or upgrade involving it is refused rather than
+// guessed at.
+var versionPattern = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-beta\.([0-9]+))?(?:\+[0-9A-Za-z.-]+)?$`)
 
-// CompareVersions returns -1, 0, 1 for release-style versions (v1.4.0). Anything else is comparable only for
-// string equality; otherwise ok is false.
+// CompareVersions returns -1, 0, 1 for release-style versions (v1.4.0, v1.4.0-beta.2). Order: numbers compare
+// numerically field by field; for the same X.Y.Z, v1.4.0-beta.1 < v1.4.0-beta.2 < v1.4.0 (a final release is
+// greater than any beta of the same number, and v1.4.0-beta.N is greater than every v1.3.x). Anything else is
+// comparable only for string equality; otherwise ok is false.
 func CompareVersions(a, b string) (cmp int, ok bool) {
 	if a == b && a != "" && a != "unknown" {
 		return 0, true
@@ -61,14 +68,44 @@ func CompareVersions(a, b string) (cmp int, ok bool) {
 		return 0, false
 	}
 	for i := 1; i <= 3; i++ {
-		x, _ := strconv.Atoi(ma[i])
-		y, _ := strconv.Atoi(mb[i])
+		x, ex := strconv.ParseUint(ma[i], 10, 64)
+		y, ey := strconv.ParseUint(mb[i], 10, 64)
+		if ex != nil || ey != nil {
+			return 0, false // absurdly long number
+		}
 		switch {
 		case x < y:
 			return -1, true
 		case x > y:
 			return 1, true
 		}
+	}
+	// same X.Y.Z: a beta is below the final release, betas order by N
+	for _, n := range []string{ma[4], mb[4]} {
+		if n != "" {
+			if _, err := strconv.ParseUint(n, 10, 64); err != nil {
+				return 0, false
+			}
+		}
+	}
+	switch {
+	case ma[4] == "" && mb[4] == "":
+		return 0, true
+	case ma[4] != "" && mb[4] == "":
+		return -1, true
+	case ma[4] == "" && mb[4] != "":
+		return 1, true
+	}
+	x, ex := strconv.ParseUint(ma[4], 10, 64)
+	y, ey := strconv.ParseUint(mb[4], 10, 64)
+	if ex != nil || ey != nil {
+		return 0, false
+	}
+	switch {
+	case x < y:
+		return -1, true
+	case x > y:
+		return 1, true
 	}
 	return 0, true
 }
@@ -146,6 +183,7 @@ func (r *RestoreService) Restore(ctx context.Context, name string, report func(s
 	if err := CheckRestoreCompatible(manifest, currentVersion, info.SysVersion, info.Timescaledb); err != nil {
 		return err
 	}
+	defer r.Backup.Protect(name)()
 	if err := r.apply(ctx, project, manifest, name, currentVersion, report, true); err != nil {
 		return err
 	}
@@ -233,6 +271,7 @@ func (r *RestoreService) apply(ctx context.Context, project string, manifest Man
 		return err // the rollback itself failed: stay stopped with the maintenance page for a person
 	}
 	// 7. rollback with the safety snapshot
+	log.Printf("restore %s: failed (%v); rolling back to the safety snapshot", name, err)
 	report(StepRollingBack, 90)
 	m, verr := r.Backup.Verify(snapshot)
 	if verr == nil {
@@ -295,6 +334,7 @@ func (r *RestoreService) restoreContents(ctx context.Context, project, name stri
 	report(StepRestoreDB, 30)
 	// the dumps travel into the PostgreSQL container as one tar, no stdin streaming needed
 	if err := r.putEntries(ctx, pkg, cfg.PostgresService, r.workdir(), "db/", "tp-restore/"); err != nil {
+		log.Printf("restore: copying the dumps into the database container: %v", err)
 		return CodedError{CodeRestoreDatabase}
 	}
 	defer func() {
@@ -307,6 +347,7 @@ func (r *RestoreService) restoreContents(ctx context.Context, project, name stri
 			return CodedError{CodeRestoreDatabase}
 		}
 		if err := r.restoreDatabase(ctx, db, path.Join(work, db+".dump")); err != nil {
+			log.Printf("restore: database %s: %v", db, err)
 			return CodedError{CodeRestoreDatabase}
 		}
 	}
@@ -365,7 +406,11 @@ func (r *RestoreService) restoreDatabase(ctx context.Context, db, dumpPath strin
 	var out bytes.Buffer
 	code, _, err := r.Backup.Runner.ExecStream(ctx, r.Backup.Project, pg.Service, []string{"pg_restore", "-U", pg.User, "-d", db, "--no-owner", "--exit-on-error", dumpPath}, &out)
 	if err != nil || code != 0 {
-		return errors.New("pg_restore failed")
+		tail := out.String()
+		if len(tail) > 400 {
+			tail = tail[len(tail)-400:]
+		}
+		return fmt.Errorf("pg_restore failed (exit %d, err %v): %s", code, err, strings.TrimSpace(tail))
 	}
 	if hasTimescale {
 		if err := q(db, "select timescaledb_post_restore()"); err != nil {

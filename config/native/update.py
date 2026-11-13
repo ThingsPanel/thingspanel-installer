@@ -21,6 +21,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import urlsplit
 import uuid
 import urllib.request
@@ -39,6 +40,22 @@ RELEASE_VERIFIER_SHA256 = "717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965ee
 RELEASE_MANIFEST = 'release-manifest.json'
 DEFAULT_RELEASE_PUBLISHER = 'https://github.com/ThingsPanel/thingspanel-installer/.github/workflows/release.yml'
 
+# Release source and trust root for the in-platform "check for updates / upgrade" (the host Agent's system role).
+# Nothing here is a default URL: with no release source configured the Agent has no upgrade block and "check for
+# updates" answers "updates_not_configured". The trust root is never taken from the payload or from the release
+# source: it is supplied out of band (TP_RELEASE_TRUST_ROOT / --release-trust-root, or the .env key of the same
+# name), copied into a private directory and pinned by SHA-256; replacing it needs an explicit switch.
+# OFFICIAL_RELEASE_TRUST_PEM is where the formal release key goes once it exists (reviewed with this file, so it
+# sits under the entry points' pin of this updater). While it is empty only an operator-supplied test root works.
+OFFICIAL_RELEASE_TRUST_PEM = b''
+RELEASE_SETTINGS_DIR = ('.tp-agent', 'release')
+RELEASE_SETTINGS_FILE = 'settings.json'
+RELEASE_TRUST_COPY = 'release-trust-root.pem'
+RELEASE_CA_COPY = 'release-ca.pem'
+RELEASE_SOURCE_PATTERN = re.compile(r'^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~%/+-]*)?$')
+IMAGE_REF_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$')
+DEFAULT_HELPER_IMAGE = 'docker:27-cli'
+
 # Independent plugin trust anchor, reviewed with the installer source. The
 # signed plugin catalog is never allowed to introduce or replace this key.
 PLUGIN_TRUST_PEM = b'''-----BEGIN PUBLIC KEY-----
@@ -49,8 +66,16 @@ HwERLCSb0Ng2n3l4djp5nlaxGQdYZFcwGZJ0UhdPyohfgnwpGnu6eZKicw==
 # Helpers are independently pinned by the entry-point-pinned updater. Keep old
 # profiles here when changing helper code so an offline last-good bundle can
 # still be restored by a later updater. R5a added the system role to agent_host.py and lets scope_sync.py defer to
-# the Agent; R5b (first profile) adds the release-source flags for `system upgrade`. Older profiles are kept.
+# the Agent; R5b adds the release-source flags for `system upgrade`. R9 (first profile) adds --compose-image and the
+# catalog-sync command and brings plugin_catalog.py/agent_host.py in line with the repository. Older profiles are kept.
 PLUGIN_HELPER_PROFILES = ({
+# R9 profile (current helpers)
+    'tools/plugin_bundle.py': 'e69e28a25cc8231ff6d8425c6e555ef9b05781e0fe37d669483ba21fe1b96504',
+    'tools/plugin_catalog.py': 'cdb87bf24681cbde47ba2142d43864b1f33296fb5012c87ee6b78b2fbd1454b7',
+    'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',
+    'tools/agent_host.py': 'db9e8391e645bbab132a3bbcdf02b072715391751a6357f310820d5ca94771cc',
+    'tools/scope_sync.py': '592b29d7401f1ad18f66b511007584c6b41688817bd4a4fea7aa7ee85a6d40c9',
+}, {
     'tools/plugin_bundle.py': 'a8fa326430c7433b20dc2cc699b115063be5e498a6a45f533dcf395a34a0ecfa',
     'tools/plugin_catalog.py': 'fe0c4c4cb5ab9af8bfb08d0003e112c07d87680e62d8017b3d0996fdae0cca21',
     'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',
@@ -313,7 +338,10 @@ def validate_config(config):
         if relational_keys:
             if backend.get('GOTP_RELATIONAL_DRIVER') != 'postgres':
                 raise ValueError()
-            if any(not isinstance(backend.get(k), (str, int)) or not str(backend[k]).strip() or '$' in str(backend[k]) for k in relational_required):
+            # The password is legitimately a ${TP_DATABASE_PASSWORD:-...} reference when no .env exists yet (fresh
+            # install: Compose cannot interpolate, so the unrendered file is checked); the endpoint fields must be literal.
+            if any(not isinstance(backend.get(k), (str, int)) or not str(backend[k]).strip() or
+                   ('$' in str(backend[k]) and not k.endswith('_PASSWORD')) for k in relational_required):
                 raise ValueError()
             if backend['GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST'] == 'postgres' and not isinstance(services.get('postgres'), dict):
                 raise ValueError()
@@ -1042,7 +1070,14 @@ def prepare_optional_plugin(root, supplied_trust_root=None, *, allow_download=Fa
             if info is None or info['sha256'] != digest:
                 raise UpdateError('Downloaded plugin helper does not match the installer pin: ' + relative)
         helpers = load_plugin_helpers(helper_root)
-        staged = helpers.stage_plugin_bundle(platform, trust_root=trust, stage_parent=parent)
+        extra = {}
+        saved = load_release_settings(root)
+        if saved.get('bundle_pages_base') or saved.get('bundle_release_base'):
+            if not (saved.get('bundle_pages_base') and saved.get('bundle_release_base')):
+                raise UpdateError('TP_BUNDLE_PAGES_BASE and TP_BUNDLE_RELEASE_BASE must be set together')
+            extra = {'pages_base_url': saved['bundle_pages_base'], 'release_base_url': saved['bundle_release_base'], 'custom_bases': True}
+            print('Plugin bundle comes from the configured mirror: %s' % saved['bundle_pages_base'], flush=True)
+        staged = helpers.stage_plugin_bundle(platform, trust_root=trust, stage_parent=parent, **extra)
         bundle = helpers.arrange_staged_bundle(staged)
         # Move only the helper files we just downloaded and pinned; no active bundle is touched.
         for relative in PLUGIN_HELPER_PROFILES[0]:
@@ -1250,6 +1285,217 @@ def verify_plugin_agent_bundle(root, plugin_trust_root=None):
     return load_verified_plugin_catalog(root, trust_root)
 
 
+def dotenv_value(root, key):
+    """One plain KEY=value from <root>/.env (no interpolation); '' when absent or unreadable."""
+    try:
+        text = (Path(root) / '.env').read_text(encoding='utf-8')
+    except (OSError, UnicodeDecodeError):
+        return ''
+    found = ''
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith('#') or '=' not in line:
+            continue
+        name, _, value = line.partition('=')
+        if name.strip() == key:
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
+                value = value[1:-1]
+            found = value
+    return found
+
+
+def release_settings_directory(root):
+    return Path(root).joinpath(*RELEASE_SETTINGS_DIR)
+
+
+def load_release_settings(root):
+    """The saved release settings, or {} when none; a damaged file is an error (never guessed at)."""
+    path = release_settings_directory(root) / RELEASE_SETTINGS_FILE
+    if file_info(path) is None:
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(value, dict):
+            raise ValueError()
+        return value
+    except (OSError, ValueError):
+        raise UpdateError('Saved release settings are damaged; remove .tp-agent/release to configure them again') from None
+
+
+def validate_release_source(value):
+    value = value.strip().rstrip('/')
+    parts = urlsplit(value)
+    if not RELEASE_SOURCE_PATTERN.match(value) or parts.username or parts.query or parts.fragment or not parts.hostname:
+        raise UpdateError('TP_RELEASE_SOURCE must be an https:// base URL without credentials or query')
+    return value
+
+
+def validate_image_ref(value, label):
+    if not IMAGE_REF_PATTERN.match(value):
+        raise UpdateError(label + ' is not a valid image reference')
+    return value
+
+
+def read_supplied_pem(path, root, label, *, public_key):
+    """Read an out-of-band PEM file; it must be a real file outside the installation directory."""
+    path = Path(path)
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise UpdateError(label + ' must be the absolute path of a regular file')
+    path = path.resolve()
+    try:
+        path.relative_to(Path(root).resolve())
+    except ValueError:
+        pass
+    else:
+        raise UpdateError(label + ' must be outside the installation directory')
+    data = path.read_bytes()
+    if not data.startswith(b'-----BEGIN ') or len(data) > 64 * 1024:
+        raise UpdateError(label + ' is not a PEM file')
+    if public_key:
+        if not data.startswith(b'-----BEGIN PUBLIC KEY-----') or len(data) > 1024:
+            raise UpdateError(label + ' must be a PEM public key')
+        if shutil.which('openssl'):
+            try:
+                text = subprocess.run(['openssl', 'pkey', '-pubin', '-noout', '-text'], input=data, stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL, check=True, timeout=30).stdout.decode('utf-8', 'replace')
+            except (OSError, subprocess.SubprocessError):
+                raise UpdateError(label + ' is not a valid public key') from None
+            if 'prime256v1' not in text and 'P-256' not in text:
+                raise UpdateError(label + ' must be an ECDSA P-256 public key')
+    return data
+
+
+def configure_release_settings(root, *, source='', trust_root='', ca='', helper_image='', replace=False,
+                               bundle_pages_base='', bundle_release_base=''):
+    """Resolve, validate and persist where the host Agent finds signed releases.
+
+    Precedence per value: argument/environment, then the installation's .env, then what was saved last time.
+    Called before the configuration transaction, so a refusal changes nothing. The pins:
+      * the trust root (and CA) are copied to a private directory and recorded by SHA-256;
+      * a different file than the recorded one is refused unless `replace` is set (an explicit operator action);
+      * with `replace` and no file supplied the built-in official root is restored (or the root is cleared if the
+        updater has none yet);
+      * nothing is ever fetched from the release source.
+    Returns the settings that are in force (also written to .tp-agent/release/settings.json).
+    """
+    root = Path(root).resolve()
+    saved = load_release_settings(root)
+    directory = release_settings_directory(root)
+    result = dict(saved)
+
+    source = source or dotenv_value(root, 'TP_RELEASE_SOURCE') or saved.get('source', '')
+    result['source'] = validate_release_source(source) if source else ''
+    image = helper_image or dotenv_value(root, 'TP_UPGRADE_HELPER_IMAGE') or saved.get('helper_image', '')
+    result['helper_image'] = validate_image_ref(image, 'TP_UPGRADE_HELPER_IMAGE') if image else ''
+
+    # Optional mirror/beta locations of the plugin bundle (catalog + Agent binary + HA image archive). Integrity never depends
+    # on these hosts: the catalog must verify against the pinned plugin trust root and all digests come from it.
+    for key, supplied_base, env_key in (('bundle_pages_base', bundle_pages_base, 'TP_BUNDLE_PAGES_BASE'),
+                                        ('bundle_release_base', bundle_release_base, 'TP_BUNDLE_RELEASE_BASE')):
+        value = supplied_base or dotenv_value(root, env_key) or saved.get(key, '')
+        result[key] = validate_release_source(value) if value else ''
+    files = {}   # copy name -> bytes to write
+    for key, copy, supplied, label, is_key in (
+            ('trust_sha256', RELEASE_TRUST_COPY, trust_root or dotenv_value(root, 'TP_RELEASE_TRUST_ROOT'),
+             'Release trust root', True),
+            ('ca_sha256', RELEASE_CA_COPY, ca or dotenv_value(root, 'TP_RELEASE_CA'), 'Release CA bundle', False)):
+        recorded = saved.get(key, '')
+        if supplied:
+            data = read_supplied_pem(supplied, root, label, public_key=is_key)
+        elif is_key and OFFICIAL_RELEASE_TRUST_PEM and (replace or not recorded):
+            data = OFFICIAL_RELEASE_TRUST_PEM
+        elif replace:
+            data = None   # explicit reset of what was pinned
+        else:
+            if recorded:
+                info = file_info(directory / copy)
+                if info is None or info['sha256'] != recorded:
+                    raise UpdateError(label + ' on this host no longer matches its recorded SHA-256; restore it or '
+                                      're-run with TP_REPLACE_RELEASE_TRUST_ROOT=1 and the intended file')
+            continue
+        if data is None:
+            result.pop(key, None)
+            continue
+        digest = hashlib.sha256(data).hexdigest()
+        if recorded and recorded != digest and not replace:
+            raise UpdateError(label + ' differs from the one pinned on this host; to switch (for example from a beta test '
+                              'key to the official key) re-run with TP_REPLACE_RELEASE_TRUST_ROOT=1')
+        result[key] = digest
+        if not recorded or recorded != digest or file_info(directory / copy) is None:
+            files[copy] = data
+        if recorded and recorded != digest:
+            print('[INFO] %s switched (SHA-256 %s... -> %s...).' % (label, recorded[:12], digest[:12]), flush=True)
+
+    removed = [copy for key, copy in (('trust_sha256', RELEASE_TRUST_COPY), ('ca_sha256', RELEASE_CA_COPY))
+               if key not in result and file_info(directory / copy) is not None]
+    if result == saved and not files and not removed:
+        return result
+    if (Path(root) / RELEASE_SETTINGS_DIR[0]).exists():
+        private_directory(Path(root) / RELEASE_SETTINGS_DIR[0])
+    else:
+        make_directories(Path(root) / RELEASE_SETTINGS_DIR[0], 0o700)
+    make_directories(directory, 0o700)
+    os.chmod(directory, 0o700)
+    for name, data in files.items():
+        durable_bytes(directory / name, data, 0o600)
+    for name in removed:
+        (directory / name).unlink()
+    durable_bytes(directory / RELEASE_SETTINGS_FILE, (json.dumps(result, sort_keys=True, indent=1) + '\n').encode(), 0o600)
+    return result
+
+
+def release_agent_flags(root):
+    """Agent flags for the saved release settings, re-verifying the pinned files; [] keeps upgrades off."""
+    root = Path(root).resolve()
+    try:
+        saved = load_release_settings(root)
+    except UpdateError as error:
+        print('[WARN] %s; in-platform upgrade stays disabled.' % error, file=sys.stderr)
+        return []
+    source = saved.get('source', '')
+    if not source:
+        print('[INFO] No release source configured (TP_RELEASE_SOURCE): in-platform "check for updates" will report '
+              '"not configured" and upgrade stays off.', flush=True)
+        return []
+    directory = release_settings_directory(root)
+    info = file_info(directory / RELEASE_TRUST_COPY)
+    if not saved.get('trust_sha256') or info is None or info['sha256'] != saved['trust_sha256']:
+        print('[WARN] A release source is set but no pinned release trust root is present (or it changed); '
+              'in-platform upgrade stays disabled.', file=sys.stderr)
+        return []
+    flags = ['--release-source', source, '--release-trust-root', str(directory / RELEASE_TRUST_COPY)]
+    if saved.get('ca_sha256'):
+        info = file_info(directory / RELEASE_CA_COPY)
+        if info is None or info['sha256'] != saved['ca_sha256']:
+            print('[WARN] The pinned release CA bundle is missing or changed; in-platform upgrade stays disabled.', file=sys.stderr)
+            return []
+        flags += ['--release-ca', str(directory / RELEASE_CA_COPY)]
+    flags += ['--compose-image', saved.get('helper_image') or DEFAULT_HELPER_IMAGE]
+    return flags
+
+
+def ensure_upgrade_helper_image(root, image):
+    """Have the upgrade's helper image on this host now, so an upgrade does not depend on a registry later.
+
+    Non-fatal: without the image the upgrade preflight refuses to start (changing nothing) and says how to import it."""
+    image = image or DEFAULT_HELPER_IMAGE
+    try:
+        run_command(['docker', 'image', 'inspect', image], root)
+        return True
+    except UpdateError:
+        pass
+    try:
+        print('Pulling the upgrade helper image %s.' % image, flush=True)
+        run_command(['docker', 'pull', image], root)
+        return True
+    except UpdateError:
+        print('[WARN] The upgrade helper image %s is not on this host and could not be pulled. In-platform upgrades will be '
+              'refused until it is present. Offline: on a machine with Internet run `docker pull %s && docker save %s -o helper.tar`, '
+              'copy helper.tar to this host and run `docker load -i helper.tar`.' % (image, image, image), file=sys.stderr)
+        return False
+
+
 def start_plugin_agent(root, plugin_trust_root=None, verified_catalog=None, bundle_root=None):
     """Start the already-verified plugin Agent after DB/network bootstrap but before the backend."""
     root = Path(root).resolve()
@@ -1262,13 +1508,49 @@ def start_plugin_agent(root, plugin_trust_root=None, verified_catalog=None, bund
     agent_bin = bundle / 'bin/tp-agent'
     catalog = bundle / 'plugins/plugin-catalog.json'
     trust_root = Path(plugin_trust_root).resolve()
+    # B3/B5/B7: every install/upgrade re-runs `agent_host.py up --system`, which makes the (possibly new) Agent binary
+    # regenerate system.json (idempotent; tokens are kept) with the pinned release source and trust root.
+    release_flags = release_agent_flags(root)
+    if release_flags:
+        ensure_upgrade_helper_image(root, release_flags[release_flags.index('--compose-image') + 1])
     run_command([
         sys.executable, str(bundle / 'tools/agent_host.py'), 'up',
         '--stack-dir', str(root), '--agent-dir', str(root / '.tp-agent'),
         '--agent-bin', str(agent_bin), '--catalog', str(catalog), '--trust-root', str(trust_root),
         '--defer-scope-watcher', '--system',
-    ], root)
+    ] + release_flags, root)
     return True
+
+
+def sync_plugin_catalog(root, args):
+    """`update.py --sync-plugin-catalog`: install the release source's newer signed plugin catalog (see
+    agent_host.py catalog-sync for the rules). The helper that does the work is the pinned one of the active bundle."""
+    root = Path(os.path.abspath(root))
+    transaction = Transaction(root)
+    with update_lock(transaction.state):
+        settings = load_release_settings(root)
+        if not settings.get('source'):
+            raise UpdateError('No release source is configured (TP_RELEASE_SOURCE); nothing to fetch the plugin catalog from')
+        active = active_plugin_directory(root)
+        if active is None:
+            raise UpdateError('No activated plugin bundle on this host; run the installer first')
+        load_plugin_helpers(active)   # only a helper set that matches an updater pin may run
+        trust = plugin_trust_root(root, args.plugin_trust_root or None)
+        command = [sys.executable, str(active / 'tools/agent_host.py'), 'catalog-sync',
+                   '--catalog', str(active / 'plugins/plugin-catalog.json'), '--trust-root', str(trust),
+                   '--release-source', settings['source']]
+        if settings.get('ca_sha256'):
+            ca = release_settings_directory(root) / RELEASE_CA_COPY
+            info = file_info(ca)
+            if info is None or info['sha256'] != settings['ca_sha256']:
+                raise UpdateError('The pinned release CA bundle changed; refusing to use it')
+            command += ['--release-ca', str(ca)]
+        if args.image_dir:
+            command += ['--image-dir', args.image_dir]
+        if args.allow_missing_images:
+            command.append('--allow-missing-images')
+        if subprocess.run(command, cwd=str(root), env=command_environment(root)).returncode:
+            raise UpdateError('Plugin catalog sync did not complete; the installed catalog is unchanged')
 
 
 def start_scope_watcher_after_activation(root):
@@ -1320,9 +1602,25 @@ def main():
     parser.add_argument('--require-signed-release', action='store_true',
                         help='fail closed unless the release verifies against --release-trust-root')
     parser.add_argument('--release-publisher', default=DEFAULT_RELEASE_PUBLISHER)
+    parser.add_argument('--release-source', default='',
+                        help='https:// base URL of the signed release the in-platform upgrade reads (default: none, upgrade off)')
+    parser.add_argument('--release-ca', default='', help='extra CA bundle (PEM) for --release-source')
+    parser.add_argument('--upgrade-helper-image', default='', help='image that runs docker compose during an in-platform upgrade')
+    parser.add_argument('--bundle-pages-base', default='', help='https:// base serving plugins/catalog-linux-<arch>.json(.sig) for the plugin bundle (default: the official site)')
+    parser.add_argument('--bundle-release-base', default='', help='https:// base serving <release_tag>/tp-agent-linux-<arch> and ha-image-linux-<arch>.tar (default: the official GitHub Releases)')
+    parser.add_argument('--sync-plugin-catalog', action='store_true',
+                        help='fetch the newer signed plugin catalog from the release source and have its images present; changes nothing else')
+    parser.add_argument('--image-dir', default='', help='with --sync-plugin-catalog: directory with <id>-linux-<arch>.tar image archives')
+    parser.add_argument('--allow-missing-images', action='store_true', help='with --sync-plugin-catalog: install the catalog even if images are missing')
+    parser.add_argument('--replace-release-trust-root', action='store_true',
+                        help='allow the release trust root (and CA) pinned on this host to be replaced')
     parser.add_argument('--revoked-version', action='append', default=[])
     args = parser.parse_args()
     try:
+        if args.sync_plugin_catalog:
+            sync_plugin_catalog(args.root, args)
+            print('Plugin catalog sync complete.')
+            return 0
         root = Path(os.path.abspath(args.root))
         if not args.recover_config_only and not (root / 'config/native/internal.crt').is_file() and shutil.which('openssl') is None:
             raise UpdateError('OpenSSL is required by native certificate preparation; no configuration was replaced')
@@ -1332,6 +1630,11 @@ def main():
                       'revoked': args.revoked_version}
         elif not args.recover_config_only:
             print('[WARN] No release trust root configured; the release signature is not verified.', file=sys.stderr)
+        if not args.recover_config_only:
+            configure_release_settings(args.root, source=args.release_source, trust_root=args.release_trust_root,
+                                       ca=args.release_ca, helper_image=args.upgrade_helper_image,
+                                       replace=args.replace_release_trust_root, bundle_pages_base=args.bundle_pages_base,
+                                       bundle_release_base=args.bundle_release_base)
         transaction = Transaction(args.root, release_policy=policy)
         if args.reconcile_activation:
             agent_started = transaction.reconcile_activation(args.plugin_trust_root or None, enable_plugin_bundle=True)
@@ -1349,10 +1652,20 @@ def main():
                 print('[WARN] ThingsPanel recovery completed, but the HA plugin Agent is not active. Fix the plugin or host issue and re-run the installer.', file=sys.stderr)
                 return 2
             return 0
-        agent_started = transaction.run(args.base_url, expected_version=args.expected_version,
-                        activate=lambda install_root: activate_native(install_root, args.plugin_trust_root or None,
-                                                                     enable_plugin_bundle=True, source=args.base_url),
-                        recovery_only=args.recover_config_only)
+        for attempt in range(4):
+            try:
+                agent_started = transaction.run(args.base_url, expected_version=args.expected_version,
+                                activate=lambda install_root: activate_native(install_root, args.plugin_trust_root or None,
+                                                                             enable_plugin_bundle=True, source=args.base_url),
+                                recovery_only=args.recover_config_only)
+                break
+            except UpdateError as error:
+                # The Agent's Broker scope sync rewrites config/native/broker/services.json (every <=20 s after a device
+                # change). The transaction refuses to start on a changed watched input and has changed nothing yet, so wait and retry.
+                if attempt == 3 or str(error) != 'Install configuration changed during update: config/native/broker/services.json':
+                    raise
+                print('The Broker scope sync touched services.json; retrying in 25 s (%d/3).' % (attempt + 1), flush=True)
+                time.sleep(25)
         if not args.recover_config_only and not agent_started:
             print('[WARN] ThingsPanel core is running, but the HA plugin Agent is not active. Fix the reported plugin or host issue and re-run the installer.', file=sys.stderr)
             return 2

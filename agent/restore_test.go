@@ -288,3 +288,32 @@ func (f *failingVersionRunner) ExecStream(ctx context.Context, p, s string, argv
 	}
 	return f.fakeRunner.ExecStream(ctx, p, s, argv, w)
 }
+
+// R9 finding: with the automatic-snapshot store full, the restore's own safety snapshot ran retention and deleted the oldest
+// package, which was the one being restored ("no such file or directory" while copying the dumps, then a rollback).
+func TestRestoreDoesNotLetRetentionDeleteItsOwnSource(t *testing.T) {
+	f := restoreFixture(t)
+	b := f.svc.Backup
+	b.Config.KeepAuto = 2
+	clock := time.Date(2026, 11, 13, 3, 0, 0, 0, time.UTC)
+	b.Now = func() time.Time { clock = clock.Add(time.Minute); return clock }
+	var autos []string
+	for i := 0; i < 2; i++ { // the store is exactly full
+		n, err := b.Create(context.Background(), "pre-upgrade", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		autos = append(autos, n)
+	}
+	f.runner.log, f.runner.dumps, f.runner.copied = nil, nil, nil
+	if err := f.svc.Restore(context.Background(), autos[0], nil); err != nil {
+		t.Fatalf("restoring the oldest automatic package: %v", err)
+	}
+	names := map[string]bool{}
+	for _, x := range b.List() {
+		names[x.Name] = true
+	}
+	if !names[autos[0]] {
+		t.Fatalf("the restored package was deleted: %v", names)
+	}
+}

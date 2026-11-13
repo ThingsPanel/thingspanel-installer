@@ -8,8 +8,8 @@ set -euo pipefail
 
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="ThingsPanel/thingspanel-installer"
-RAW_BASE="https://install.thingspanel.io"
-UPDATE_ENGINE_SHA256="535e5af2e0566588ab0b837b339dcfd545e2ec921d4c13618c71de46fca6dc64"
+RAW_BASE="${RAW_BASE:-https://install.thingspanel.io}"
+UPDATE_ENGINE_SHA256="0bb38cd027b98a2f1bdc32113f45612a89467f230914f5d300e8b1c3ed071d41"
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -55,6 +55,13 @@ PY
     # Signed releases: a trust root is supplied out of band (never from the payload).
     if [ -n "${TP_RELEASE_TRUST_ROOT:-}" ]; then args+=(--release-trust-root "$TP_RELEASE_TRUST_ROOT"); fi
     if [ "${TP_REQUIRE_SIGNED_RELEASE:-}" = "1" ]; then args+=(--require-signed-release); fi
+    # In-platform "check for updates / upgrade": where the signed release lives (never a built-in default).
+    if [ -n "${TP_RELEASE_SOURCE:-}" ]; then args+=(--release-source "$TP_RELEASE_SOURCE"); fi
+    if [ -n "${TP_RELEASE_CA:-}" ]; then args+=(--release-ca "$TP_RELEASE_CA"); fi
+    if [ -n "${TP_UPGRADE_HELPER_IMAGE:-}" ]; then args+=(--upgrade-helper-image "$TP_UPGRADE_HELPER_IMAGE"); fi
+    if [ "${TP_REPLACE_RELEASE_TRUST_ROOT:-}" = "1" ]; then args+=(--replace-release-trust-root); fi
+    if [ -n "${TP_BUNDLE_PAGES_BASE:-}" ]; then args+=(--bundle-pages-base "$TP_BUNDLE_PAGES_BASE"); fi
+    if [ -n "${TP_BUNDLE_RELEASE_BASE:-}" ]; then args+=(--bundle-release-base "$TP_BUNDLE_RELEASE_BASE"); fi
     if [ -n "${TP_REVOKED_VERSIONS:-}" ]; then
         for revoked in ${TP_REVOKED_VERSIONS//,/ }; do args+=(--revoked-version "$revoked"); done
     fi

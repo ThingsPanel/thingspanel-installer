@@ -42,6 +42,7 @@ func main() {
 	releaseSource := flag.String("release-source", "", "with -provision-system: HTTPS base URL of the signed release; enables `system upgrade`")
 	releaseTrust := flag.String("release-trust-root", "", "with -release-source: release trust root (PEM) as seen inside this container")
 	releaseCA := flag.String("release-ca", "", "with -release-source: extra CA bundle (PEM) for the release source, as seen inside this container")
+	composeImage := flag.String("compose-image", "", "with -release-source: image that runs `docker compose` during an upgrade (default docker:27-cli); it is pulled or must be present on the host")
 	hostRoot := flag.String("host-root", "", "with -release-source: the stack directory on the Docker host")
 	project := flag.String("project", "", "compose project name (with -provision-system)")
 	sweep := flag.Duration("sweep-interval", 5*time.Second, "lease/generation sweep cadence")
@@ -64,7 +65,7 @@ func main() {
 	if *provision != "" {
 		var up *agent.ProvisionUpgrade
 		if *releaseSource != "" {
-			up = &agent.ProvisionUpgrade{Source: *releaseSource, TrustRootCtr: *releaseTrust, CACtr: *releaseCA, HostRoot: *hostRoot}
+			up = &agent.ProvisionUpgrade{Source: *releaseSource, TrustRootCtr: *releaseTrust, CACtr: *releaseCA, HostRoot: *hostRoot, ComposeImage: *composeImage}
 		}
 		if err := agent.ProvisionSystem(*provision, *project, up); err != nil {
 			log.Fatalf("provision system role: %v", err)

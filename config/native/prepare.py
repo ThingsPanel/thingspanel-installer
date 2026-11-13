@@ -139,8 +139,11 @@ def validate_supported_backend_database(config):
     )
     relational_keys = [key for key in env if key.startswith('GOTP_RELATIONAL_')]
     if relational_keys:
+        # The password may be an unresolved ${TP_DATABASE_PASSWORD:-...} reference: on a fresh install there is no .env yet and
+        # the unrendered Compose file is what gets checked. The endpoint fields must be literal.
         if env.get('GOTP_RELATIONAL_DRIVER') != 'postgres' or any(
-            not isinstance(env.get(key), (str, int)) or not str(env[key]).strip() or '$' in str(env[key])
+            not isinstance(env.get(key), (str, int)) or not str(env[key]).strip() or
+            ('$' in str(env[key]) and not key.endswith('_PASSWORD'))
             for key in relational_required
         ):
             raise RuntimeError('Cannot confirm the supported PostgreSQL backend configuration')

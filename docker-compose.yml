@@ -97,6 +97,8 @@ services:
     - ${TP_PORT_BACKEND:-9999}:9999
     environment:
     - TZ=Asia/Shanghai
+    # Re-label a promoted beta image (R9). Empty/unset = the compiled version; images before R9 ignore it.
+    - TP_VERSION_OVERRIDE=${TP_VERSION_OVERRIDE:-}
     # Keep the legacy keys while the published v1.3.0 backend image is in use.
     # A1 builds read relational.* and ignore the retired db.psql.* keys.
     - GOTP_DB_PSQL_HOST=postgres
@@ -308,6 +310,7 @@ services:
     networks:
     - thingspanel_network
     environment:
+      TP_VERSION_OVERRIDE: ${TP_VERSION_OVERRIDE:-}
       TP_AUTH_MODE: legacy-jwt
       TP_JWT_KEY: ${TP_JWT_KEY:?set in .env}
       TP_COMMUNITY_BASE_URL: http://backend:9999

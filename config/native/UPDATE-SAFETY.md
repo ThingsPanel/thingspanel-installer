@@ -59,3 +59,28 @@ broker 的 `plugin-token`、`owner-tokens.json`、`services.json` 迁入最小�
 `TP_THINGSVIS_IMAGE` 支持隔离验收使用的本地镜像选择；本机 image ID 不是远程 registry manifest digest。当前 formal release 仍缺少具有独立信任根的整组签名 manifest；仅 HTTPS 和 updater hash 不证明全部 payload 的发布身份。旧已安装入口对 updater 的固定 pin 也不会自动授权不同字节的新 updater。此类跨 updater 版本升级必须经已审阅的新 bootstrap 或补齐正式签名发布协议，不能以放宽 hash 检查自动重试。
 
 隔离环境使用已有本地制品时，另设置 `TP_THINGSVIS_LOCAL_IMAGE_ID` 为完整 Docker `sha256:...` image ID。native pull 先核对该 ID 与 Compose 实际选择一致，然后只对这一 ThingsVis 镜像跳过 registry pull；其他组件保持原规则。ID 不符或镜像缺失立即失败，不回退下载另一个版本。生产 registry 引用应使用发布清单对应的远程摘要，不能把本机 image ID 填成 registry digest。
+
+## 发布源、信任根与升级辅助镜像（R9）
+
+平台内“检查更新 / 升级”由宿主 Agent 的 system 角色执行。它读取一个**签名发布清单**（`<发布源>/release-manifest.json` + `.sig`），只信任一把由运维**带外**提供的 ECDSA P-256 公钥。安装/升级入口把下面几项传给 updater，updater 再传给 `agent_host.py up --system`（每次 install/upgrade 都会重跑，幂等；`system.json` 由当前 Agent 二进制重新生成，已有 token 保留）。
+
+| 设置 | 入口环境变量 | 说明 |
+| --- | --- | --- |
+| 发布源 | `TP_RELEASE_SOURCE`（或 `.env` 同名键） | `https://` 基础 URL。**没有默认值**：未配置时 Agent 没有 upgrade 配置，“检查更新”返回 `updates_not_configured`（界面应显示“未配置发布源”）。 |
+| 信任根 | `TP_RELEASE_TRUST_ROOT`（绝对路径，或 `.env` 同名键） | 与安装包签名校验共用同一个变量：设置它还会要求本次下载的安装包由该密钥签名。必须在安装目录之外，必须是 P-256 公钥 PEM。 |
+| 额外 CA | `TP_RELEASE_CA` | 私有镜像站的 CA 包（可选）。 |
+| 辅助镜像 | `TP_UPGRADE_HELPER_IMAGE` | 升级时运行 `docker compose` 的镜像，默认 `docker:27-cli`。 |
+| 更换信任根 | `TP_REPLACE_RELEASE_TRUST_ROOT=1` | 见下。 |
+
+优先级：入口参数/环境变量 > 安装目录 `.env` > 上次保存的值。保存位置 `.tp-agent/release/`（0700）：`settings.json`、信任根副本 `release-trust-root.pem`、CA 副本。
+
+**信任根的钉扎**：信任根从不取自发布源或下载内容。updater 在配置事务**之前**校验并复制它，并记录 SHA-256。之后：
+
+* 再次提供的文件与记录不一致 → 拒绝（不改任何东西），除非显式设置 `TP_REPLACE_RELEASE_TRUST_ROOT=1`；
+* 磁盘上的副本与记录不一致（被改动）→ 拒绝重新配置，并且 Agent 启动时**不启用升级**（平台和插件照常）；
+* 设置了发布源但没有信任根 → 升级保持关闭；
+* 正式信任根将作为常量 `OFFICIAL_RELEASE_TRUST_PEM` 写进 `update.py`（与现有 `PLUGIN_TRUST_PEM` 同样处理，随入口对 updater 的摘要固定一起受保护）。目前为空，只有运维提供的测试信任根可用。有了该常量后，没有显式提供信任根的机器自动使用它；beta 机器切换：`TP_REPLACE_RELEASE_TRUST_ROOT=1` 且不提供 `TP_RELEASE_TRUST_ROOT`，再运行 `upgrade.sh`（或提供正式公钥文件）。
+
+**升级辅助镜像**：install/upgrade 在启动 Agent 前确认本机有该镜像，没有就拉取；拉不到只警告并打印 `docker save/load` 办法。升级预检再检查一次：缺失且拉取失败时返回 `upgrade_helper_image_unavailable`，此时尚未快照、停服或替换任何文件，Agent 日志里有离线导入步骤（`UPGRADE-HELPER-IMAGE`）。
+
+**helper 摘要**：`agent_host.py` 等受钉扎的 helper 每次修改都要在 `PLUGIN_HELPER_PROFILES` 最前面加新的 profile（旧的保留），并重新计算入口脚本里的 `UPDATE_ENGINE_SHA256`。发布前运行 `tests/test_update_transaction.py`（含入口摘要检查）和 `tests/test_plugin_bundle_activation.py`。

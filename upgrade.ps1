@@ -26,8 +26,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $REPO     = "ThingsPanel/thingspanel-installer"
-$RAW_BASE = "https://install.thingspanel.io"
-$UPDATE_ENGINE_SHA256 = "535e5af2e0566588ab0b837b339dcfd545e2ec921d4c13618c71de46fca6dc64"
+$RAW_BASE = if ($env:RAW_BASE) { $env:RAW_BASE } else { "https://install.thingspanel.io" }
+$UPDATE_ENGINE_SHA256 = "0bb38cd027b98a2f1bdc32113f45612a89467f230914f5d300e8b1c3ed071d41"
 
 function Write-Info    ($m) { Write-Host "[INFO]  $m" -ForegroundColor Cyan }
 function Write-Success ($m) { Write-Host "[OK]    $m" -ForegroundColor Green }
@@ -65,6 +65,12 @@ function Invoke-SafeUpdate($Directory, $ExpectedVersion) {
         # Signed releases: a trust root is supplied out of band (never from the payload).
         if ($env:TP_RELEASE_TRUST_ROOT) { $arguments += @('--release-trust-root', $env:TP_RELEASE_TRUST_ROOT) }
         if ($env:TP_REQUIRE_SIGNED_RELEASE -eq '1') { $arguments += @('--require-signed-release') }
+        if ($env:TP_RELEASE_SOURCE) { $arguments += @('--release-source', $env:TP_RELEASE_SOURCE) }
+        if ($env:TP_RELEASE_CA) { $arguments += @('--release-ca', $env:TP_RELEASE_CA) }
+        if ($env:TP_UPGRADE_HELPER_IMAGE) { $arguments += @('--upgrade-helper-image', $env:TP_UPGRADE_HELPER_IMAGE) }
+        if ($env:TP_REPLACE_RELEASE_TRUST_ROOT -eq '1') { $arguments += @('--replace-release-trust-root') }
+        if ($env:TP_BUNDLE_PAGES_BASE) { $arguments += @('--bundle-pages-base', $env:TP_BUNDLE_PAGES_BASE) }
+        if ($env:TP_BUNDLE_RELEASE_BASE) { $arguments += @('--bundle-release-base', $env:TP_BUNDLE_RELEASE_BASE) }
         if ($env:TP_REVOKED_VERSIONS) { foreach ($revoked in ($env:TP_REVOKED_VERSIONS -split '[,\s]+' | Where-Object { $_ })) { $arguments += @('--revoked-version', $revoked) } }
         & $python.Source @arguments
         if ($LASTEXITCODE -ne 0) { throw 'Upgrade did not complete. Preserve .thingspanel-update for recovery.' }

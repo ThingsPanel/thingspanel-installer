@@ -47,10 +47,14 @@ class StagedPluginBundle:
     catalog: dict
 
 
-def _validate_https_base(value, *, release=False):
+def _validate_https_base(value, *, release=False, custom=False):
     parsed = urlsplit(value)
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise PluginBundleError('bundle base URL must be an absolute HTTPS URL without credentials, query, or fragment')
+    if custom:
+        # Operator-chosen mirror/beta source (R9). Integrity does not depend on the host: the catalog must verify against the
+        # pinned plugin trust root and every asset digest comes from that signed catalog.
+        return value.rstrip('/')
     if release:
         normalized = value.rstrip('/')
         if normalized != DEFAULT_RELEASE_BASE_URL:
@@ -181,6 +185,7 @@ def _validate_catalog(catalog, target_platform):
 def stage_plugin_bundle(target_platform, *, trust_root, stage_parent,
                         pages_base_url=DEFAULT_PAGES_BASE_URL,
                         release_base_url=DEFAULT_RELEASE_BASE_URL,
+                        custom_bases=False,
                         downloader=None, catalog_loader=None,
                         max_agent_bytes=MAX_AGENT_BYTES,
                         max_image_archive_bytes=MAX_IMAGE_ARCHIVE_BYTES):
@@ -198,8 +203,8 @@ def stage_plugin_bundle(target_platform, *, trust_root, stage_parent,
     trust_root = Path(trust_root)
     if not trust_root.is_absolute() or not trust_root.is_file():
         raise PluginBundleError('plugin trust root must be an available absolute package-external file')
-    pages_base_url = _validate_https_base(pages_base_url)
-    release_base_url = _validate_https_base(release_base_url, release=True)
+    pages_base_url = _validate_https_base(pages_base_url, custom=custom_bases)
+    release_base_url = _validate_https_base(release_base_url, release=True, custom=custom_bases)
     parent = _safe_stage_parent(stage_parent)
     trust_root = trust_root.resolve()
     try:

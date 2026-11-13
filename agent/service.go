@@ -205,7 +205,7 @@ func (s *Service) retire(ctx context.Context, r apiRequest) (apiResponse, error)
 	return apiResponse{}, err
 }
 
-func (s *Service) listCatalog(_ context.Context, _ apiRequest) (apiResponse, error) {
+func (s *Service) listCatalog(ctx context.Context, _ apiRequest) (apiResponse, error) {
 	if s.catalog == nil {
 		return apiResponse{}, ErrPreparationPolicy
 	}
@@ -215,7 +215,13 @@ func (s *Service) listCatalog(_ context.Context, _ apiRequest) (apiResponse, err
 	}
 	out := make([]PublicEntry, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, e.Public())
+		pub := e.Public()
+		if s.preparer != nil && s.preparer.engine != nil {
+			_, err := s.preparer.engine.inspectImage(ctx, e.ImageID)
+			present := err == nil
+			pub.ImagePresent = &present
+		}
+		out = append(out, pub)
 	}
 	return apiResponse{Catalog: out}, nil
 }

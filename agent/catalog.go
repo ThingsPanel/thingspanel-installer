@@ -85,6 +85,10 @@ type CatalogEntry struct {
 }
 
 type PublicEntry struct {
+	// ImagePresent: the image this entry pins is present on this host, so an install or upgrade can start it. nil
+	// when the Agent could not tell. The control plane refuses to upgrade a plugin whose new image is missing,
+	// because the old generation is revoked before the new one is prepared.
+	ImagePresent      *bool                       `json:"image_present,omitempty"`
 	ID                string                      `json:"id"`
 	DisplayName       string                      `json:"display_name"`
 	Version           string                      `json:"version"`

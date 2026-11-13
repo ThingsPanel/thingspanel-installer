@@ -100,6 +100,7 @@ tp-agentctl … system upgrade to=vX.Y.Z-beta.N
 2. 用**正式发布密钥**（或同一把 beta 密钥，若负责人决定）对 `--version vX.Y.Z` 重新签名同一提交的文件；上传到发布源（替换 beta 内容）。
 3. beta 机器：`系统设置 → 检查更新` 应显示 `vX.Y.Z` 更新 → 升级。数据应保持不变。
 4. 新装机器：`TP_VERSION=vX.Y.Z`。
+5. 版本号显示：后端分支 `wp/R9-version-override`（待合并，提交 `077ea0ff`）支持环境变量 `TP_VERSION_OVERRIDE`，本仓库 `docker-compose.yml` 已把它传给 `backend` 和 `encore-api`（未设置=编译进去的版本号，合并前的旧镜像会忽略它）。晋升时同一镜像摘要不重编，只需在安装目录 `.env` 里写 `TP_VERSION_OVERRIDE=vX.Y.Z` 后重建这两个容器。注意：升级流程是否会保留 `.env` 里的这一行，还没有真实验证。
 
 ## 7. 信任根：beta → 正式
 

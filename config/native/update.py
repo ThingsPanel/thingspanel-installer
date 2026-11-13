@@ -65,8 +65,16 @@ HwERLCSb0Ng2n3l4djp5nlaxGQdYZFcwGZJ0UhdPyohfgnwpGnu6eZKicw==
 # Helpers are independently pinned by the entry-point-pinned updater. Keep old
 # profiles here when changing helper code so an offline last-good bundle can
 # still be restored by a later updater. R5a added the system role to agent_host.py and lets scope_sync.py defer to
-# the Agent; R5b (first profile) adds the release-source flags for `system upgrade`. Older profiles are kept.
+# the Agent; R5b adds the release-source flags for `system upgrade`. R9 (first profile) adds --compose-image and the
+# catalog-sync command and brings plugin_catalog.py/agent_host.py in line with the repository. Older profiles are kept.
 PLUGIN_HELPER_PROFILES = ({
+# R9 profile (current helpers)
+    'tools/plugin_bundle.py': 'a8fa326430c7433b20dc2cc699b115063be5e498a6a45f533dcf395a34a0ecfa',
+    'tools/plugin_catalog.py': 'cdb87bf24681cbde47ba2142d43864b1f33296fb5012c87ee6b78b2fbd1454b7',
+    'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',
+    'tools/agent_host.py': 'db9e8391e645bbab132a3bbcdf02b072715391751a6357f310820d5ca94771cc',
+    'tools/scope_sync.py': '592b29d7401f1ad18f66b511007584c6b41688817bd4a4fea7aa7ee85a6d40c9',
+}, {
     'tools/plugin_bundle.py': 'a8fa326430c7433b20dc2cc699b115063be5e498a6a45f533dcf395a34a0ecfa',
     'tools/plugin_catalog.py': 'fe0c4c4cb5ab9af8bfb08d0003e112c07d87680e62d8017b3d0996fdae0cca21',
     'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',
@@ -1496,6 +1504,37 @@ def start_plugin_agent(root, plugin_trust_root=None, verified_catalog=None, bund
     return True
 
 
+def sync_plugin_catalog(root, args):
+    """`update.py --sync-plugin-catalog`: install the release source's newer signed plugin catalog (see
+    agent_host.py catalog-sync for the rules). The helper that does the work is the pinned one of the active bundle."""
+    root = Path(os.path.abspath(root))
+    transaction = Transaction(root)
+    with update_lock(transaction.state):
+        settings = load_release_settings(root)
+        if not settings.get('source'):
+            raise UpdateError('No release source is configured (TP_RELEASE_SOURCE); nothing to fetch the plugin catalog from')
+        active = active_plugin_directory(root)
+        if active is None:
+            raise UpdateError('No activated plugin bundle on this host; run the installer first')
+        load_plugin_helpers(active)   # only a helper set that matches an updater pin may run
+        trust = plugin_trust_root(root, args.plugin_trust_root or None)
+        command = [sys.executable, str(active / 'tools/agent_host.py'), 'catalog-sync',
+                   '--catalog', str(active / 'plugins/plugin-catalog.json'), '--trust-root', str(trust),
+                   '--release-source', settings['source']]
+        if settings.get('ca_sha256'):
+            ca = release_settings_directory(root) / RELEASE_CA_COPY
+            info = file_info(ca)
+            if info is None or info['sha256'] != settings['ca_sha256']:
+                raise UpdateError('The pinned release CA bundle changed; refusing to use it')
+            command += ['--release-ca', str(ca)]
+        if args.image_dir:
+            command += ['--image-dir', args.image_dir]
+        if args.allow_missing_images:
+            command.append('--allow-missing-images')
+        if subprocess.run(command, cwd=str(root), env=command_environment(root)).returncode:
+            raise UpdateError('Plugin catalog sync did not complete; the installed catalog is unchanged')
+
+
 def start_scope_watcher_after_activation(root):
     """Start the optional Broker scope watcher after the transaction lock is released."""
     root = Path(root).resolve()
@@ -1549,11 +1588,19 @@ def main():
                         help='https:// base URL of the signed release the in-platform upgrade reads (default: none, upgrade off)')
     parser.add_argument('--release-ca', default='', help='extra CA bundle (PEM) for --release-source')
     parser.add_argument('--upgrade-helper-image', default='', help='image that runs docker compose during an in-platform upgrade')
+    parser.add_argument('--sync-plugin-catalog', action='store_true',
+                        help='fetch the newer signed plugin catalog from the release source and have its images present; changes nothing else')
+    parser.add_argument('--image-dir', default='', help='with --sync-plugin-catalog: directory with <id>-linux-<arch>.tar image archives')
+    parser.add_argument('--allow-missing-images', action='store_true', help='with --sync-plugin-catalog: install the catalog even if images are missing')
     parser.add_argument('--replace-release-trust-root', action='store_true',
                         help='allow the release trust root (and CA) pinned on this host to be replaced')
     parser.add_argument('--revoked-version', action='append', default=[])
     args = parser.parse_args()
     try:
+        if args.sync_plugin_catalog:
+            sync_plugin_catalog(args.root, args)
+            print('Plugin catalog sync complete.')
+            return 0
         root = Path(os.path.abspath(args.root))
         if not args.recover_config_only and not (root / 'config/native/internal.crt').is_file() and shutil.which('openssl') is None:
             raise UpdateError('OpenSSL is required by native certificate preparation; no configuration was replaced')

@@ -3,6 +3,7 @@
 
     agent_host.py up   --stack-dir DIR --agent-dir DIR --agent-bin tp-agent --catalog plugin-catalog.json --trust-root root.pem
     agent_host.py down --stack-dir DIR
+    agent_host.py catalog-sync --catalog BUNDLE/plugins/plugin-catalog.json --trust-root plugin-root.pem --release-source https://...
 
 Layout under --agent-dir (created 0700):
     run/    agent.sock + token      the ONLY part the platform backend container mounts (TP_AGENT_SOCKET/TP_AGENT_TOKEN_FILE)
@@ -19,8 +20,10 @@ import argparse
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -147,14 +150,121 @@ def up(args):
     ensure_scope_watcher(stack, agent_dir, deferred=args.defer_scope_watcher)
 
 
+def docker_platform():
+    out = sh(['docker', 'info', '--format', '{{.OSType}}/{{.Architecture}}']).stdout.strip().lower()
+    os_name, _, arch = out.partition('/')
+    return '%s/%s' % (os_name, {'aarch64': 'arm64', 'x86_64': 'amd64'}.get(arch, arch))
+
+
+def image_present(image_id):
+    return sh(['docker', 'image', 'inspect', '--format', '{{.Id}}', image_id], check=False).returncode == 0
+
+
+def catalog_sync(args):
+    """Install a newer signed plugin catalog from the release source and have every entry's image on this host.
+
+        agent_host.py catalog-sync --catalog BUNDLE/plugins/plugin-catalog.json --trust-root PLUGIN_ROOT.pem
+                                   --release-source https://... [--release-ca ca.pem] [--image-dir DIR]
+
+    Fetches <source>/plugins/catalog-linux-<arch>.json and .sig, verifies them against the plugin trust root exactly as
+    the Agent will (the Agent verifies again on every use; nothing here is trusted by it), and refuses anything that is
+    not a drop-in replacement of the running bundle: the Agent binary and the Home Assistant image archive digests must
+    be the ones the bundle was verified with (changing them needs a new bundle, which is a different procedure), and
+    the catalog version must not go backwards. Images: an entry whose image is not on the host is loaded from
+    DIR/<id>-<os>-<arch>.tar (sha256 must equal the entry's image_archive_sha256, and the loaded image id must equal
+    image_id). If any image stays missing the catalog is NOT replaced, unless --allow-missing-images.
+    """
+    import hashlib
+    import plugin_bundle
+    import plugin_catalog
+    catalog_path = Path(args.catalog).resolve()
+    bundle = catalog_path.parent.parent
+    agent_bin, ha_archive = bundle / 'bin/tp-agent', bundle / 'plugins/homeassistant-image.tar'
+    trust_root = Path(args.trust_root).resolve()
+    if not args.release_source or not args.release_source.startswith('https://'):
+        raise RuntimeError('catalog-sync needs --release-source (https://); none is configured, so there is nothing to fetch')
+    if not trust_root.is_file() or not catalog_path.is_file() or not Path(str(catalog_path) + '.sig').is_file():
+        raise RuntimeError('the active catalog, its signature and the plugin trust root must exist')
+    if args.release_ca:
+        os.environ['SSL_CERT_FILE'] = str(Path(args.release_ca).resolve())   # urllib's default context honours it
+    platform = docker_platform()
+    arch = platform.split('/', 1)[1]
+    stage = Path(tempfile.mkdtemp(prefix='.catalog-sync-', dir=str(catalog_path.parent)))
+    os.chmod(stage, 0o700)
+    try:
+        base = args.release_source.rstrip('/') + '/plugins/catalog-linux-%s.json' % arch
+        new_json, new_sig = stage / 'plugin-catalog.json', stage / 'plugin-catalog.json.sig'
+        plugin_bundle._download(plugin_bundle._download_stream, base, new_json, plugin_bundle.MAX_CATALOG_BYTES)
+        plugin_bundle._download(plugin_bundle._download_stream, base + '.sig', new_sig, plugin_bundle.MAX_SIGNATURE_BYTES)
+        os.rename(new_json, stage / 'catalog-linux.json')   # load_verified reads <file> and <file>.sig
+        os.rename(new_sig, stage / 'catalog-linux.json.sig')
+        fresh = plugin_catalog.load_verified(stage / 'catalog-linux.json', trust_root)   # signature, schema, expiry, entries
+        try:
+            current = plugin_catalog.load_verified(catalog_path, trust_root)
+        except Exception:  # noqa: BLE001 - an expired installed catalog is exactly when a sync is needed; digests still gate it
+            current = {}
+            print('note: the installed catalog does not verify (expired?); only digests are compared')
+        if fresh.get('target_platform') != platform:
+            raise RuntimeError('the served catalog is for %s, this host is %s' % (fresh.get('target_platform'), platform))
+        if current and fresh.get('agent_sha256') != current.get('agent_sha256'):
+            raise RuntimeError('the served catalog names a different Agent binary: that needs a new plugin bundle, not a catalog sync')
+        ha_new = [e for e in fresh['plugins'] if e['id'] == 'homeassistant']
+        if len(ha_new) != 1 or ha_new[0].get('image_archive_sha256') != hashlib.sha256(ha_archive.read_bytes()).hexdigest():
+            raise RuntimeError('the served catalog changes the Home Assistant image archive: that needs a new plugin bundle, not a catalog sync')
+        if hashlib.sha256(agent_bin.read_bytes()).hexdigest() != fresh.get('agent_sha256'):
+            raise RuntimeError('the active Agent binary does not match the served catalog')
+        if current and str(fresh['version']) != str(current['version']):
+            try:
+                if int(fresh['version']) < int(current['version']):
+                    raise RuntimeError('the served catalog (version %s) is older than the installed one (%s); not going backwards'
+                                       % (fresh['version'], current['version']))
+            except ValueError:
+                pass   # non-numeric versions are compared by equality only; the signature already vouches for the file
+        missing = []
+        image_dir = Path(args.image_dir).resolve() if args.image_dir else None
+        for entry in fresh['plugins']:
+            image_id = entry['image_id']
+            if image_present(image_id):
+                print('image ok       %s %s' % (entry['id'], entry['version']))
+                continue
+            archive = image_dir / ('%s-%s-%s.tar' % (entry['id'], platform.split('/')[0], arch)) if image_dir else None
+            want = entry.get('image_archive_sha256')
+            if archive and archive.is_file() and want:
+                digest = hashlib.sha256()
+                with archive.open('rb') as stream:
+                    for block in iter(lambda: stream.read(1 << 20), b''):
+                        digest.update(block)
+                if digest.hexdigest() != want:
+                    raise RuntimeError('image archive %s does not match the signed catalog digest' % archive.name)
+                sh(['docker', 'load', '-i', str(archive)])
+                if image_present(image_id):
+                    print('image loaded   %s %s (from %s)' % (entry['id'], entry['version'], archive.name))
+                    continue
+                raise RuntimeError('%s loaded but the image id is not the one the catalog names' % archive.name)
+            missing.append(entry)
+            print('image MISSING  %s %s: %s is not on this host%s' % (
+                entry['id'], entry['version'], image_id[:19],
+                ' (no archive %s in --image-dir)' % archive.name if archive else ' (give --image-dir with <id>-%s-%s.tar, or docker load it)' % (platform.split('/')[0], arch)))
+        if missing and not args.allow_missing_images:
+            raise RuntimeError('%d image(s) missing; the catalog was NOT replaced (the Agent would list updates it cannot apply). '
+                               'Provide the images or use --allow-missing-images' % len(missing))
+        # Both files are replaced one after the other; the Agent re-verifies per use, so a read between the two renames
+        # fails closed for that one call only.
+        os.replace(stage / 'catalog-linux.json', catalog_path)
+        os.replace(stage / 'catalog-linux.json.sig', Path(str(catalog_path) + '.sig'))
+        print('catalog version %s installed: %s' % (fresh['version'], ', '.join('%s@%s' % (e['id'], e['version']) for e in fresh['plugins'])))
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
 def down(args):
     sh(['docker', 'rm', '-f', container_name(args.stack_dir)], check=False)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('command', choices=['up', 'down'])
-    parser.add_argument('--stack-dir', required=True)
+    parser.add_argument('command', choices=['up', 'down', 'catalog-sync'])
+    parser.add_argument('--stack-dir')
     parser.add_argument('--agent-dir')
     parser.add_argument('--agent-bin')
     parser.add_argument('--catalog')
@@ -167,15 +277,21 @@ def main():
     parser.add_argument('--release-trust-root', help='with --release-source: PEM public key that must have signed the release')
     parser.add_argument('--compose-image', help='with --release-source: image that runs docker compose during `system upgrade` (default docker:27-cli)')
     parser.add_argument('--release-ca', help='with --release-source: extra CA bundle (PEM) for the release source')
+    parser.add_argument('--image-dir', help='catalog-sync: directory with <id>-<os>-<arch>.tar image archives for entries whose image is missing')
+    parser.add_argument('--allow-missing-images', action='store_true', help='catalog-sync: install the catalog even if some images are missing')
     parser.add_argument('--defer-scope-watcher', action='store_true',
                         help='installer owns the update lock and will start the watcher after activation')
     args = parser.parse_args()
+    if args.command != 'catalog-sync' and not args.stack_dir:
+        parser.error('--stack-dir is required')
+    if args.command == 'catalog-sync' and not (args.catalog and args.trust_root):
+        parser.error('catalog-sync needs --catalog and --trust-root')
     if args.compose_image and not args.release_source:
         parser.error('--compose-image needs --release-source')
     if args.command == 'up' and not all([args.agent_dir, args.agent_bin, args.catalog, args.trust_root]):
         parser.error('up needs --agent-dir, --agent-bin, --catalog and --trust-root')
     try:
-        {'up': up, 'down': down}[args.command](args)
+        {'up': up, 'down': down, 'catalog-sync': catalog_sync}[args.command](args)
     except Exception as error:  # noqa: BLE001 - CLI boundary
         print('error: %s' % error, file=sys.stderr)
         return 1

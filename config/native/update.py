@@ -337,7 +337,10 @@ def validate_config(config):
         if relational_keys:
             if backend.get('GOTP_RELATIONAL_DRIVER') != 'postgres':
                 raise ValueError()
-            if any(not isinstance(backend.get(k), (str, int)) or not str(backend[k]).strip() or '$' in str(backend[k]) for k in relational_required):
+            # The password is legitimately a ${TP_DATABASE_PASSWORD:-...} reference when no .env exists yet (fresh
+            # install: Compose cannot interpolate, so the unrendered file is checked); the endpoint fields must be literal.
+            if any(not isinstance(backend.get(k), (str, int)) or not str(backend[k]).strip() or
+                   ('$' in str(backend[k]) and not k.endswith('_PASSWORD')) for k in relational_required):
                 raise ValueError()
             if backend['GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST'] == 'postgres' and not isinstance(services.get('postgres'), dict):
                 raise ValueError()

@@ -231,3 +231,29 @@ class ReleaseSettings(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FreshInstallCompose(unittest.TestCase):
+    """R9/B6 finding: on a clean machine there is no .env, Compose cannot interpolate, and the unrendered file used to
+    fail the updater's PostgreSQL guard because the password is a ${...} reference. A fresh install never got past it."""
+
+    def test_repository_compose_passes_the_guard_without_an_env_file(self):
+        if subprocess.run(['docker', 'compose', 'version'], capture_output=True).returncode:
+            self.skipTest('docker compose is not available')
+        with tempfile.TemporaryDirectory() as directory:
+            update.render_with_fallback(Path(directory), REPO / 'docker-compose.yml')
+
+    def test_endpoint_fields_must_still_be_literal(self):
+        config = {'services': {
+            'postgres': {},
+            'thingsvis-server': {'environment': {'DATABASE_URL': 'postgresql://u:p@postgres:5432/d'}},
+            'backend': {'environment': {
+                'GOTP_DB_PSQL_HOST': 'postgres', 'GOTP_DB_PSQL_PORT': '5432', 'GOTP_DB_PSQL_USERNAME': 'postgres', 'GOTP_DB_PSQL_DBNAME': 'd',
+                'GOTP_RELATIONAL_DRIVER': 'postgres', 'GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST': 'postgres',
+                'GOTP_RELATIONAL_POSTGRES_PLATFORM_PORT': '5432', 'GOTP_RELATIONAL_POSTGRES_PLATFORM_DATABASE': 'd',
+                'GOTP_RELATIONAL_POSTGRES_PLATFORM_USERNAME': 'postgres',
+                'GOTP_RELATIONAL_POSTGRES_PLATFORM_PASSWORD': '${TP_DATABASE_PASSWORD:-x}'}}}}
+        update.validate_config(config)     # an unresolved password reference is fine
+        config['services']['backend']['environment']['GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST'] = '${HOST}'
+        with self.assertRaises(update.UpdateError):
+            update.validate_config(config)  # an unresolved host is not

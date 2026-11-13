@@ -206,3 +206,34 @@ be on the stack's Docker network for `http://backend:9999/...` style probes.
 tp-agentctl -socket SYSTEM.sock -token-file system.token system status
 tp-agentctl -socket SYSTEM.sock -token-file system.token system verify wait_seconds=300   # exit 0 = healthy
 ```
+
+## System upgrade (R5b)
+
+`tp-agentctl ... system upgrade to=v1.3.1` upgrades the platform to the release served at the configured
+HTTPS `upgrade.source` (system config; `agent_host.py up --system --release-source URL --release-trust-root PEM`).
+Only the target version comes from the request; it must match the signed manifest and the backend image tag of
+the staged `docker-compose.yml`. Unsigned upgrades do not exist: without a trust root the block is refused.
+
+Order: preflight (version is newer, data services up, compose helper image present) → download, verify and
+validate the whole release in a private stage and pull every image it names (nothing changed yet) → **mandatory
+snapshot** (a backup, trigger `pre-upgrade`) → maintenance flag, stop the control plane → replace the managed files
+(Go configuration transaction, shared lock and journal with `update.py`) → `docker compose up -d --no-deps
+--pull never` for the deployed services, run in a one-shot helper container (`upgrade.compose_image`, default
+`docker:27-cli`; compose recreates only what changed) → health gate (backend `/health` includes the database
+schema version) → commit. Any failure after the first file was replaced rolls back: stop, put the configuration
+files back, restore the databases and files from the snapshot, start the old images, pass the gate again
+(`upgrade_failed_rolled_back`). If that fails too the state is `needs_human`: the maintenance flag stays, nothing
+is deleted, and no further upgrade is accepted.
+
+Progress and crash recovery live in `upgrade.state_file` (no secrets; phases `preflight, staging, snapshot_done,
+stopping, applying, applied, starting, verifying, committed | aborted | rolling_back, rolled_back | needs_human`).
+Every phase is written before its work starts. After a crash (kill -9, power loss) the Agent reads it at start-up:
+before `applying` it only cleans up and restarts the control plane (`upgrade_aborted`); from `applying` on it rolls
+back with the snapshot. Helper containers a dead Agent left running are removed first. `system status` shows the
+state under `upgrade`.
+
+Limits: the health gate passes when the stack is healthy at one moment, it does not watch for later crashes; the
+snapshot and rollback restore data, so rows written between the snapshot and the rollback are lost (the stack is in
+maintenance during that window, but devices that publish meanwhile are not buffered); images must be pullable
+before the upgrade starts (no offline mode); the compose helper image is pulled from Docker Hub unless already
+present.

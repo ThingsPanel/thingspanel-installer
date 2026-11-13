@@ -48,9 +48,15 @@ HwERLCSb0Ng2n3l4djp5nlaxGQdYZFcwGZJ0UhdPyohfgnwpGnu6eZKicw==
 '''
 # Helpers are independently pinned by the entry-point-pinned updater. Keep old
 # profiles here when changing helper code so an offline last-good bundle can
-# still be restored by a later updater. R5a: the first profile adds the system role to agent_host.py and lets
-# scope_sync.py defer to the Agent; the second is the previous release's.
+# still be restored by a later updater. R5a added the system role to agent_host.py and lets scope_sync.py defer to
+# the Agent; R5b (first profile) adds the release-source flags for `system upgrade`. Older profiles are kept.
 PLUGIN_HELPER_PROFILES = ({
+    'tools/plugin_bundle.py': 'a8fa326430c7433b20dc2cc699b115063be5e498a6a45f533dcf395a34a0ecfa',
+    'tools/plugin_catalog.py': 'fe0c4c4cb5ab9af8bfb08d0003e112c07d87680e62d8017b3d0996fdae0cca21',
+    'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',
+    'tools/agent_host.py': '8debdd30696a78a45149cf64dd0ed86956eb6f822d0541b5004fd5208a3f9e9c',
+    'tools/scope_sync.py': '592b29d7401f1ad18f66b511007584c6b41688817bd4a4fea7aa7ee85a6d40c9',
+}, {
     'tools/plugin_bundle.py': 'a8fa326430c7433b20dc2cc699b115063be5e498a6a45f533dcf395a34a0ecfa',
     'tools/plugin_catalog.py': 'fe0c4c4cb5ab9af8bfb08d0003e112c07d87680e62d8017b3d0996fdae0cca21',
     'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',

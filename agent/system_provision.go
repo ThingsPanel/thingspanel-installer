@@ -23,8 +23,33 @@ const (
 	ContainerStatusDir = "/run/agent/status"
 )
 
+// ProvisionUpgrade is what an installation must supply to enable `system upgrade`.
+type ProvisionUpgrade struct {
+	Source       string // HTTPS base URL of the signed release
+	TrustRootCtr string // release trust root, as the Agent container sees it
+	CACtr        string // optional extra CA bundle for Source, as the Agent container sees it
+	HostRoot     string // the stack directory on the Docker host
+	ComposeImage string // default docker:27-cli
+}
+
 // ProductionSystemConfig is the system-role description of the reviewed docker-compose.yml.
-func ProductionSystemConfig(project string) SystemConfig {
+func ProductionSystemConfig(project string, up *ProvisionUpgrade) SystemConfig {
+	cfg := productionSystemConfig(project)
+	if up != nil {
+		image := up.ComposeImage
+		if image == "" {
+			image = "docker:27-cli"
+		}
+		cfg.Upgrade = &UpgradeConfig{Source: up.Source, TrustRoot: up.TrustRootCtr, CAFile: up.CACtr, ComposeImage: image, HostRoot: up.HostRoot,
+			StateFile: "/run/agent/system/upgrade.json",
+			// Only services that exist as containers are touched; optional ones are simply absent.
+			Services: []string{"postgres", "redis", "backend", "encore-api", "notification-core", "automation-scheduler",
+				"broker-owner", "mosquitto", "frontend", "thingsvis-server", "thingsvis-studio"}}
+	}
+	return cfg
+}
+
+func productionSystemConfig(project string) SystemConfig {
 	return SystemConfig{
 		Project: project,
 		Components: []Component{
@@ -56,10 +81,10 @@ func ProductionSystemConfig(project string) SystemConfig {
 	}
 }
 
-// ProvisionSystem writes DIR/system.json and, when absent, DIR/token. DIR is created 0700. An existing token is
-// kept so a restart of the Agent does not invalidate the credentials operators hold.
-func ProvisionSystem(dir, project string) error {
-	cfg := ProductionSystemConfig(project)
+// ProvisionSystem writes DIR/system.json. DIR is created 0700 and holds only the Agent's own system state (the
+// config and the upgrade state file); it is never mounted into a platform container.
+func ProvisionSystem(dir, project string, up *ProvisionUpgrade) error {
+	cfg := ProductionSystemConfig(project, up)
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -73,7 +98,18 @@ func ProvisionSystem(dir, project string) error {
 	if err != nil {
 		return err
 	}
-	if err := atomicWrite(filepath.Join(dir, "system.json"), append(raw, '\n'), 0o644, false); err != nil {
+	return atomicWrite(filepath.Join(dir, "system.json"), append(raw, '\n'), 0o644, false)
+}
+
+// ProvisionSystemToken creates DIR/token (the system bearer token) when it is absent or too short, keeping a
+// good one so a restart does not invalidate the credentials operators hold. DIR also receives the system
+// socket, and it is the one directory the platform's Encore container mounts (read-only), so that DIR holds
+// nothing but the socket and this token.
+func ProvisionSystemToken(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
 	tokenPath := filepath.Join(dir, "token")

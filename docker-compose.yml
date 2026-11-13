@@ -9,23 +9,20 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-        restart: true
       encore-api:
         condition: service_started
-        restart: true
       notification-core:
         condition: service_started
-        restart: true
       thingsvis-server:
         condition: service_started
-        restart: true
       thingsvis-studio:
         condition: service_started
-        restart: true
     volumes:
     - ./niginx.conf:/etc/nginx/nginx.conf:ro
     - ./config/native/internal.crt:/run/config/internal.crt:ro
     - ./config/native/internal.key:/run/config/internal.key:ro
+    # Written by the Agent's system role (no secrets): the maintenance page polls status.json.
+    - ./.tp-agent/status:/usr/share/nginx/status:ro
     restart: unless-stopped
     networks:
     - thingspanel_network
@@ -318,6 +315,9 @@ services:
       TP_AUTOMATION_SERVICE_TOKEN: ${TP_AUTOMATION_TOKEN:?set in .env}
       # Bearer token of GET /internal/broker-scope, read by the Agent's system role. Empty = the route does not exist.
       GOTP_BROKER_SCOPE_TOKEN: ${TP_BROKER_SCOPE_TOKEN:-}
+      # The system API of the host-side manager: only this container mounts the socket directory (read-only).
+      TP_SYSTEM_SOCKET: /run/tp-system/agent-system.sock
+      TP_SYSTEM_TOKEN_FILE: /run/tp-system/token
       # The brokerscope service reads the platform database (read-only queries) through pkg/relational.
       TP_RELATIONAL_DRIVER: postgres
       TP_RELATIONAL_POSTGRES_PLATFORM_HOST: postgres
@@ -334,6 +334,7 @@ services:
       ENCORE_INFRA_CONFIG_PATH: /run/config/runtime.json
     volumes:
     - ./config/native/runtime.encore.json:/run/config/runtime.json:ro
+    - ./.tp-agent/system-api:/run/tp-system:ro
     depends_on:
       postgres:
         condition: service_healthy

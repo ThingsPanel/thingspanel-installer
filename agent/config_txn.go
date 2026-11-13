@@ -14,6 +14,8 @@ package agent
 
 import (
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -65,29 +67,53 @@ type Downloader func(url, dest string) error
 
 // HTTPSDownloader is the default: HTTPS only (also across redirects), 180 s, 16 MiB, fsynced.
 func HTTPSDownloader(rawURL, dest string) error {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
-		return txnErr("Installer file download failed")
+	d, _ := NewHTTPSDownloader("")
+	return d(rawURL, dest)
+}
+
+// NewHTTPSDownloader is HTTPSDownloader that also trusts the certificates in extraCAFile (a PEM bundle), for
+// release mirrors with a private CA. An empty path means the system roots only.
+func NewHTTPSDownloader(extraCAFile string) (Downloader, error) {
+	transport := &http.Transport{Proxy: http.ProxyFromEnvironment}
+	if extraCAFile != "" {
+		pem, err := os.ReadFile(extraCAFile)
+		if err != nil {
+			return nil, err
+		}
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, txnErr("No usable certificate in the release CA file")
+		}
+		transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	}
-	client := &http.Client{Timeout: 180 * time.Second, CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+	client := &http.Client{Timeout: 180 * time.Second, Transport: transport, CheckRedirect: func(req *http.Request, _ []*http.Request) error {
 		if req.URL.Scheme != "https" {
 			return txnErr("Installer file download failed")
 		}
 		return nil
 	}}
-	resp, err := client.Get(rawURL)
-	if err != nil {
-		return txnErr("Installer file download failed")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return txnErr("Installer file download failed")
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadedFile+1))
-	if err != nil || len(body) == 0 || int64(len(body)) > maxDownloadedFile {
-		return txnErr("Downloaded installer file is empty or too large")
-	}
-	return durableWrite(dest, body, 0o600, nil)
+	return func(rawURL, dest string) error {
+		u, err := url.Parse(rawURL)
+		if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+			return txnErr("Installer file download failed")
+		}
+		resp, err := client.Get(rawURL)
+		if err != nil {
+			return txnErr("Installer file download failed")
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return txnErr("Installer file download failed")
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadedFile+1))
+		if err != nil || len(body) == 0 || int64(len(body)) > maxDownloadedFile {
+			return txnErr("Downloaded installer file is empty or too large")
+		}
+		return durableWrite(dest, body, 0o600, nil)
+	}, nil
 }
 
 // ActivateFunc is the caller's post-commit step. While it runs the journal is "activation_started"; if it
@@ -110,8 +136,18 @@ type ConfigTransaction struct {
 	// Checkpoint is called at named steps; an error aborts as if the step failed (tests use it to crash).
 	Checkpoint func(event string) error
 
-	state, journalPath string
+	// LockHeld means the caller already holds the update lock for the whole operation (the upgrade does).
+	LockHeld bool
+
+	state, journalPath, stageDir, operation string
 }
+
+// StageDir is the private directory holding the complete staged payload of the current transaction. It is set
+// once the payload has been downloaded; Checkpoint hooks use it to inspect what is about to be applied.
+func (t *ConfigTransaction) StageDir() string { return t.stageDir }
+
+// Operation is the id of the transaction prepared by the current Run (empty before preparation finished).
+func (t *ConfigTransaction) Operation() string { return t.operation }
 
 type journalFile struct {
 	Path string  `json:"path"`
@@ -359,7 +395,6 @@ func ValidateStage(stage string, artifacts []Artifact, expectedVersion string) e
 	return nil
 }
 
-
 // ComposeBackendImage returns the `image:` value of the top-level service named backend, read from the text of
 // a docker-compose.yml (no YAML library: the reviewed Compose file keeps services two spaces deep).
 func ComposeBackendImage(compose string) (string, bool) {
@@ -438,6 +473,8 @@ func (t *ConfigTransaction) prepare(source, expectedVersion string) (*journal, e
 		return nil, err
 	}
 	stage, backups := filepath.Join(dir, "stage"), filepath.Join(dir, "backup")
+	t.stageDir = stage
+	t.operation = op
 	for _, p := range []string{stage, backups} {
 		if err := os.Mkdir(p, 0o700); err != nil {
 			return nil, err
@@ -735,11 +772,13 @@ func (t *ConfigTransaction) Run(source, expectedVersion string, activate Activat
 	if err := t.init(); err != nil {
 		return err
 	}
-	unlock, err := AcquireUpdateLock(t.state)
-	if err != nil {
-		return err
+	if !t.LockHeld {
+		unlock, lerr := AcquireUpdateLock(t.state)
+		if lerr != nil {
+			return lerr
+		}
+		defer unlock()
 	}
-	defer unlock()
 	old, err := t.load()
 	if err != nil {
 		return err
@@ -800,4 +839,34 @@ func (t *ConfigTransaction) Run(source, expectedVersion string, activate Activat
 	}
 	j.Phase = "complete"
 	return t.save(j)
+}
+
+// Revert puts every managed file back as it was before the last transaction, whether that transaction was
+// interrupted part-way or completed (the upgrade rolls back a completed one when the new version fails its
+// health gate). It refuses, like recovery, when a file was changed by someone else since, when a backup is
+// missing or changed, and after an activation that has started. A journal already recovered is a no-op, so the
+// call is safe to repeat after a crash. operation, when not empty, must equal the journal's operation id
+// (Operation()), so only the caller's own transaction is ever reverted.
+func (t *ConfigTransaction) Revert(operation string) error {
+	if err := t.init(); err != nil {
+		return err
+	}
+	if !t.LockHeld {
+		unlock, err := AcquireUpdateLock(t.state)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
+	j, err := t.load()
+	if err != nil || j == nil {
+		return err
+	}
+	if operation != "" && j.Operation != operation {
+		return nil // the journal belongs to some other transaction: not ours to revert
+	}
+	if j.Phase == "complete" {
+		j.Phase = "config_committed" // in memory only; recover saves "recovering" then "recovered"
+	}
+	return t.recover(j)
 }

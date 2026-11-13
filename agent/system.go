@@ -52,6 +52,8 @@ type SystemConfig struct {
 	Backup *BackupConfig `json:"backup,omitempty"`
 	// ScopeSync keeps the Broker's device scope in step with the platform (the former P1 watcher). Optional.
 	ScopeSync *ScopeSyncConfig `json:"scope_sync,omitempty"`
+	// Upgrade enables `system upgrade`: where the signed release comes from and how the new version is started. Optional.
+	Upgrade *UpgradeConfig `json:"upgrade,omitempty"`
 	// StatusDir receives status.json and the maintenance flag `active` (world-readable, no secrets). Optional.
 	StatusDir string `json:"status_dir,omitempty"`
 }
@@ -128,6 +130,14 @@ func (c SystemConfig) Validate() error {
 	}
 	if c.ScopeSync != nil {
 		if err := c.ScopeSync.validate(seen); err != nil {
+			return err
+		}
+	}
+	if c.Upgrade != nil {
+		if c.Backup == nil {
+			return ErrSystemConfig // an upgrade needs the snapshot
+		}
+		if err := c.Upgrade.validate(seen); err != nil {
 			return err
 		}
 	}

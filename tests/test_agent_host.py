@@ -22,7 +22,8 @@ class SystemRole(unittest.TestCase):
     def args(self, root, **extra):
         values = dict(stack_dir=str(root / 'stack'), agent_dir=str(root / 'agent'), agent_bin=str(root / 'tp-agent'),
                       catalog=str(root / 'plugin-catalog.json'), trust_root=str(root / 'root.pem'), agent_image='img:1',
-                      network=None, system=True, defer_scope_watcher=True)
+                      network=None, system=True, defer_scope_watcher=True,
+                      release_source=None, release_trust_root=None, release_ca=None)
         values.update(extra)
         return mock.Mock(**values)
 
@@ -50,8 +51,8 @@ class SystemRole(unittest.TestCase):
         calls, stop, ensure, root = self.run_up(True)
         run = next(c for c in calls if c[:3] == ['docker', 'run', '-d'])
         joined = ' '.join(run)
-        self.assertIn('-system-socket /run/agent/system/agent-system.sock', joined)
-        self.assertIn('-system-token-file /run/agent/system/token', joined)
+        self.assertIn('-system-socket /run/agent/system-api/agent-system.sock', joined)
+        self.assertIn('-system-token-file /run/agent/system-api/token', joined)
         self.assertIn('-system-config /run/agent/system/system.json', joined)
         # The platform backend mounts only agent/run; the system socket must live in a different directory.
         self.assertIn('%s:/run/agent/system' % (root / 'agent/system').resolve(), joined)
@@ -60,8 +61,28 @@ class SystemRole(unittest.TestCase):
         self.assertIn('--network', run)
         provision = next(c for c in calls if '-provision-system' in c)
         self.assertEqual(provision[provision.index('-provision-system') + 1], '/run/agent/system')
+        api = next(c for c in calls if '-provision-system-api' in c)
+        self.assertEqual(api[api.index('-provision-system-api') + 1], '/run/agent/system-api')
+        self.assertIn('%s:/run/agent/system-api' % (root / 'agent/system-api').resolve(), joined)
         stop.assert_called_once()          # the Python watcher is stopped, not started beside the Agent
         ensure.assert_not_called()
+
+    def test_release_source_enables_upgrade_only_with_a_trust_root(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'stack').mkdir()
+            with mock.patch.object(agent_host, 'sh', return_value=mock.Mock()):
+                with self.assertRaisesRegex(RuntimeError, 'unsigned upgrades are not allowed'):
+                    agent_host.provision_system(self.args(root, release_source='https://updates.example/release'), root / 'agent', 'p')
+                calls = []
+                with mock.patch.object(agent_host, 'sh', lambda a, check=True: calls.append(a)):
+                    mounts, _ = agent_host.provision_system(self.args(root, release_source='https://updates.example/release',
+                                                                      release_trust_root=str(root / 'root.pem')), root / 'agent', 'p')
+                provision = calls[0]
+                self.assertEqual(provision[provision.index('-release-source') + 1], 'https://updates.example/release')
+                self.assertIn('-host-root', provision)
+                self.assertTrue(any(m.endswith(':/run/agent/release-root.pem:ro') for m in mounts))
 
     def test_without_system_flag_nothing_changes(self):
         calls, stop, ensure, root = self.run_up(False)

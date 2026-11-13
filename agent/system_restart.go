@@ -246,6 +246,32 @@ func (o *Operator) selected(scope string) (broker, control []Component) {
 	return
 }
 
+// CheckResult is the answer to "is the configuration valid": OK, or the service whose check failed, or Skipped
+// when the backend is not running so the check cannot be run (a restart then proceeds, it is the recovery).
+type CheckResult struct {
+	OK      bool   `json:"ok"`
+	Skipped bool   `json:"skipped,omitempty"`
+	Service string `json:"service,omitempty"`
+	Code    string `json:"code,omitempty"`
+}
+
+// CheckConfigOnce runs the configured check command in the running container. It never changes anything.
+func (o *Operator) CheckConfigOnce(ctx context.Context) CheckResult {
+	cc := o.Config.CheckConfig
+	if cc == nil {
+		return CheckResult{OK: true, Skipped: true}
+	}
+	states, err := o.Manager.Containers(ctx, o.Config.Project)
+	if err != nil || !states[cc.Service].Running {
+		return CheckResult{OK: true, Skipped: true, Service: cc.Service, Code: CodeCheckSkipped}
+	}
+	code, err := o.Manager.Exec(ctx, o.Config.Project, cc.Service, cc.Argv)
+	if err != nil || code != 0 {
+		return CheckResult{OK: false, Service: cc.Service, Code: CodeConfigInvalid}
+	}
+	return CheckResult{OK: true, Service: cc.Service}
+}
+
 func (o *Operator) runRestart(ctx context.Context, scope string) {
 	project := o.Config.Project
 	grace := o.Grace

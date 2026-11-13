@@ -53,7 +53,9 @@ install/upgrade 每次都在 `start_plugin_agent` 里重跑 `agent_host.py up --
 - Python（`python3 -m unittest discover -s tests`）：187 个全过；新增 `test_release_settings.py`（19 个）、`test_catalog_sync.py`（6 个）。`tools/` 下有 6 个与本卡无关的失败（`test_plugin_install.UserEnv`）在基线上就存在。
 
 ### 真实验收（隔离 Docker 项目 `r9`，macOS arm64 / OrbStack；结束后已清理自己创建的容器、卷、网络、`r9-*` 镜像与工作目录）
-用的是真正的 `install.bash` 与安装后的 `upgrade.sh`；后端镜像用后端 `origin/develop` 源码加 `SYSTEM_VERSION=vX.Y.Z[-beta.N]` 本地构建（`v1.3.0`、`v1.4.0-beta.1/2`、故意迁移出错的 `v1.4.0-beta.3`、`v1.4.0`，每个带自己的迁移 SQL 和 `VERSION_NUMBER`），Encore 镜像按 `build-encore-image.sh` 的服务清单（含 `system`）用 `origin/develop` 构建，前端用此前演练的 UI 镜像；发布清单用测试密钥签名，发布源是本机 nginx（安装器要求 HTTPS，Agent 通过自签 CA 访问）。
+**第二轮（最终结果）用合并后的集成分支重做**：后端 `integration/r9-20261113`（含 `wp/R8-ci-services`、`wp/R9-agent-error-messages`、`wp/R9-version-override`，没有合进 develop）构建后端与 Encore 镜像。第二轮 v1.3.0 → beta.1 → beta.2 → 坏 beta.3（回退 339 秒）→ v1.4.0、降级拒绝、辅助镜像不可用、Agent 刷新（token 不变）、晋升、旧备份恢复全部通过。第一轮用旧 develop 源码，下面的描述以此为底；验收脚本与日志在仓库之外的 `/Volumes/KIOXIA/archive/evidence/2026-11-13-R9/`（`run1-drift/` 是失败的那一轮）。
+
+用的是真正的 `install.bash` 与安装后的 `upgrade.sh`；后端镜像用后端源码加 `SYSTEM_VERSION=vX.Y.Z[-beta.N]` 本地构建（`v1.3.0`、`v1.4.0-beta.1/2`、故意迁移出错的 `v1.4.0-beta.3`、`v1.4.0`，每个带自己的迁移 SQL 和 `VERSION_NUMBER`），Encore 镜像按 `build-encore-image.sh` 的服务清单（含 `system`）用 `origin/develop` 构建，前端用此前演练的 UI 镜像；发布清单用测试密钥签名，发布源是本机 nginx（安装器要求 HTTPS，Agent 通过自签 CA 访问）。
 | 验收项 | 结果 |
 | --- | --- |
 | 全新安装 v1.3.0（`install.bash`，旧 Agent bundle，只给信任根不给发布源） | **通过**（修了两处阻塞 bug 后，见“发现的问题”1）。`system status` 全部 ok；`system updates` → `updates_not_configured`；`system.json` 无 upgrade 块 |
@@ -63,7 +65,7 @@ install/upgrade 每次都在 `start_plugin_agent` 里重跑 `agent_host.py up --
 | 降级尝试（beta.2 机器，服务 beta.1） | `upgrade_not_newer`，预检阶段拒绝，站点不变 |
 | 故意失败的升级（`v1.4.0-beta.3`，迁移 `SELECT 1/0`） | **自动回退**：`upgrade_failed_rolled_back`，回到 beta.2、`sys_version` 27、标记行 1,2、半成品表不存在、数据不变；耗时 339 秒（健康门等满，已知局限） |
 | 辅助镜像不可用（配成不可拉取的名字，再试升级） | 预检返回 `upgrade_helper_image_unavailable`，Agent 日志有离线导入步骤，站点除状态行外完全相同；install/upgrade 阶段也打印了警告和 `docker save/load` 办法 |
-| 恢复：beta.1 备份恢复到 v1.4.0 机器 | **未通过也未能判定**：恢复自动回退（`restore_failed_rolled_back`），站点未变。**很可能是验收镜像的人为问题**（我构造的 `v1.4.0` 镜像只带自己的 `28.sql`，没有 `27.sql`，旧备份向前迁移缺文件），但我没有去证实。正式版/beta 备份兼容规则只有单元测试 |
+| 恢复：旧版本备份恢复到正式版机器 | **通过（第二轮，修了 Agent 的 bug 之后）**。v1.3.0 → beta.1 → v1.4.0 后，把 v1.3.0 时期的备份恢复上去：45 秒完成，`sys_version` 38，迁移标记行 1,2,3，设备/用户/自建 50 行数据不变，维护标志关。第一轮失败的真正原因见“发现的问题”6（不是我之前猜的验收镜像缺 SQL） |
 
 没有做到的：
 - **“全新安装并启用发布源”一次完成**没有单独跑一遍（我用“安装 → 带发布源再跑 `upgrade.sh`”代替；参数在两条路径上是同一套代码）。
@@ -78,6 +80,9 @@ install/upgrade 每次都在 `start_plugin_agent` 里重跑 `agent_host.py up --
 3. **待办（后端/前端）**：新错误码 `upgrade_helper_image_unavailable` 需要在 Encore `system` 的错误映射和前端码表里加说明文字（我没改后端/前端，也没检查它们是否会把未知码显示成通用错误）。
 4. `prepare.py --verify` 硬编码检查 `127.0.0.1:19091` 和 `:503`；同机有其他栈占用 503 时检查会假阳性。（验收里就是这样，不改。）
 5. 升级失败回退最坏约 339 秒（已知，交接文档 §5.6）。
+6. **已修（`847cd6f`）：恢复会删掉自己要恢复的备份。** 自动备份只留 3 份；恢复开始前先做“安全快照”，这一步触发保留策略，删了最旧的一份，而它常常正是要恢复的那份，于是复制备份时“文件不存在”，报 `database_restore_failed` 并回退。`BackupService.Protect()` 让恢复源在恢复期间不参与清理；回归测试在没有修复时失败。Agent 现在也会把恢复失败的原因写进日志（之前只有一个错误码）。
+7. **观察（未处理）：** 把旧版本备份恢复到新版本机器后，`docker-compose.yml` 的内容变成了备份时的那份（后端镜像仍是 v1.4.0，数据向前迁移成功）。恢复是否应该还原 Compose 文件，建议备份/恢复负责人确认。
+8. **版本号晋升（`TP_VERSION_OVERRIDE`）已验证到容器层**：同一个 beta.2 镜像（id 不变），设置 `TP_VERSION_OVERRIDE=v1.4.0` 后 `--version` 为 v1.4.0；非法值被忽略并告警。安装器 Compose 已把它传给 `backend`、`encore-api`。升级流程是否保留 `.env` 里的这一行**未验证**。
 
 ## 已替负责人做出的决定（负责人授权按最佳实践执行，可随时推翻）
 

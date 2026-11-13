@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -182,6 +183,7 @@ func (r *RestoreService) Restore(ctx context.Context, name string, report func(s
 	if err := CheckRestoreCompatible(manifest, currentVersion, info.SysVersion, info.Timescaledb); err != nil {
 		return err
 	}
+	defer r.Backup.Protect(name)()
 	if err := r.apply(ctx, project, manifest, name, currentVersion, report, true); err != nil {
 		return err
 	}
@@ -269,6 +271,7 @@ func (r *RestoreService) apply(ctx context.Context, project string, manifest Man
 		return err // the rollback itself failed: stay stopped with the maintenance page for a person
 	}
 	// 7. rollback with the safety snapshot
+	log.Printf("restore %s: failed (%v); rolling back to the safety snapshot", name, err)
 	report(StepRollingBack, 90)
 	m, verr := r.Backup.Verify(snapshot)
 	if verr == nil {
@@ -331,6 +334,7 @@ func (r *RestoreService) restoreContents(ctx context.Context, project, name stri
 	report(StepRestoreDB, 30)
 	// the dumps travel into the PostgreSQL container as one tar, no stdin streaming needed
 	if err := r.putEntries(ctx, pkg, cfg.PostgresService, r.workdir(), "db/", "tp-restore/"); err != nil {
+		log.Printf("restore: copying the dumps into the database container: %v", err)
 		return CodedError{CodeRestoreDatabase}
 	}
 	defer func() {
@@ -343,6 +347,7 @@ func (r *RestoreService) restoreContents(ctx context.Context, project, name stri
 			return CodedError{CodeRestoreDatabase}
 		}
 		if err := r.restoreDatabase(ctx, db, path.Join(work, db+".dump")); err != nil {
+			log.Printf("restore: database %s: %v", db, err)
 			return CodedError{CodeRestoreDatabase}
 		}
 	}
@@ -401,7 +406,11 @@ func (r *RestoreService) restoreDatabase(ctx context.Context, db, dumpPath strin
 	var out bytes.Buffer
 	code, _, err := r.Backup.Runner.ExecStream(ctx, r.Backup.Project, pg.Service, []string{"pg_restore", "-U", pg.User, "-d", db, "--no-owner", "--exit-on-error", dumpPath}, &out)
 	if err != nil || code != 0 {
-		return errors.New("pg_restore failed")
+		tail := out.String()
+		if len(tail) > 400 {
+			tail = tail[len(tail)-400:]
+		}
+		return fmt.Errorf("pg_restore failed (exit %d, err %v): %s", code, err, strings.TrimSpace(tail))
 	}
 	if hasTimescale {
 		if err := q(db, "select timescaledb_post_restore()"); err != nil {

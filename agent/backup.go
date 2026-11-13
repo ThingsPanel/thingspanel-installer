@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -261,6 +262,32 @@ type BackupService struct {
 	Now     func() time.Time
 	// FreeBytes reports free space of the filesystem holding path; replaceable in tests.
 	FreeBytes func(path string) (uint64, error)
+
+	protectMu sync.Mutex
+	protected map[string]bool // packages retention must not delete right now (a restore is reading one)
+}
+
+// Protect keeps a package out of retention until the returned function is called. A restore takes a safety
+// snapshot of the current state first; with the store full that snapshot would otherwise delete the oldest
+// package, which is exactly the one being restored.
+func (s *BackupService) Protect(name string) (release func()) {
+	s.protectMu.Lock()
+	if s.protected == nil {
+		s.protected = map[string]bool{}
+	}
+	s.protected[name] = true
+	s.protectMu.Unlock()
+	return func() {
+		s.protectMu.Lock()
+		delete(s.protected, name)
+		s.protectMu.Unlock()
+	}
+}
+
+func (s *BackupService) isProtected(name string) bool {
+	s.protectMu.Lock()
+	defer s.protectMu.Unlock()
+	return s.protected[name]
 }
 
 func (s *BackupService) now() time.Time {
@@ -546,8 +573,16 @@ func (s *BackupService) retention() {
 		}
 	}
 	sort.Slice(auto, func(i, j int) bool { return auto[i].CreatedAt.After(auto[j].CreatedAt) })
-	for i := keep; i < len(auto); i++ {
-		_ = s.Delete(auto[i].Name)
+	kept := 0
+	for _, b := range auto {
+		if kept < keep {
+			kept++
+			continue
+		}
+		if s.isProtected(b.Name) {
+			continue // in use by a restore; it goes at the next retention pass
+		}
+		_ = s.Delete(b.Name)
 	}
 }
 

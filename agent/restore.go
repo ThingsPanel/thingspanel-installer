@@ -48,10 +48,16 @@ const (
 	StepRollingBack     = "rolling_back"
 )
 
-var versionPattern = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+].*)?$`)
+// versionPattern accepts vX.Y.Z, optionally followed by one pre-release tag of the form -beta.N and/or +build
+// metadata (ignored, as in semver). Any other suffix (-rc.1, -dev, -dirty, ...) is deliberately not parsed: such
+// a version is comparable only for string equality, so a restore or upgrade involving it is refused rather than
+// guessed at.
+var versionPattern = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-beta\.([0-9]+))?(?:\+[0-9A-Za-z.-]+)?$`)
 
-// CompareVersions returns -1, 0, 1 for release-style versions (v1.4.0). Anything else is comparable only for
-// string equality; otherwise ok is false.
+// CompareVersions returns -1, 0, 1 for release-style versions (v1.4.0, v1.4.0-beta.2). Order: numbers compare
+// numerically field by field; for the same X.Y.Z, v1.4.0-beta.1 < v1.4.0-beta.2 < v1.4.0 (a final release is
+// greater than any beta of the same number, and v1.4.0-beta.N is greater than every v1.3.x). Anything else is
+// comparable only for string equality; otherwise ok is false.
 func CompareVersions(a, b string) (cmp int, ok bool) {
 	if a == b && a != "" && a != "unknown" {
 		return 0, true
@@ -61,14 +67,44 @@ func CompareVersions(a, b string) (cmp int, ok bool) {
 		return 0, false
 	}
 	for i := 1; i <= 3; i++ {
-		x, _ := strconv.Atoi(ma[i])
-		y, _ := strconv.Atoi(mb[i])
+		x, ex := strconv.ParseUint(ma[i], 10, 64)
+		y, ey := strconv.ParseUint(mb[i], 10, 64)
+		if ex != nil || ey != nil {
+			return 0, false // absurdly long number
+		}
 		switch {
 		case x < y:
 			return -1, true
 		case x > y:
 			return 1, true
 		}
+	}
+	// same X.Y.Z: a beta is below the final release, betas order by N
+	for _, n := range []string{ma[4], mb[4]} {
+		if n != "" {
+			if _, err := strconv.ParseUint(n, 10, 64); err != nil {
+				return 0, false
+			}
+		}
+	}
+	switch {
+	case ma[4] == "" && mb[4] == "":
+		return 0, true
+	case ma[4] != "" && mb[4] == "":
+		return -1, true
+	case ma[4] == "" && mb[4] != "":
+		return 1, true
+	}
+	x, ex := strconv.ParseUint(ma[4], 10, 64)
+	y, ey := strconv.ParseUint(mb[4], 10, 64)
+	if ex != nil || ey != nil {
+		return 0, false
+	}
+	switch {
+	case x < y:
+		return -1, true
+	case x > y:
+		return 1, true
 	}
 	return 0, true
 }

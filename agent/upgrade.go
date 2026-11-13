@@ -265,6 +265,7 @@ func (u *Upgrader) Run(ctx context.Context, to string, report func(step string, 
 				return err
 			}
 			u.Steps.Maintenance(true)
+			report(StepStopping, 30)
 			if err := u.save(s, UpStopping); err != nil {
 				hookCode = CodeUpgradeApply
 				return err

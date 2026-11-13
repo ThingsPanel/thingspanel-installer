@@ -270,5 +270,15 @@ func (l *LiveUpgrade) ComposeUp(ctx context.Context) error {
 	if code != 0 {
 		return fmt.Errorf("compose up failed (exit %d): %s", code, strings.TrimSpace(tail))
 	}
+	l.reloadProxy(ctx)
 	return nil
+}
+
+// reloadProxy makes the running reverse proxy read the (possibly replaced or restored) niginx.conf. Compose does
+// not recreate a service whose bind-mounted file changed. Best effort: an invalid file keeps the old
+// configuration running, and the proxy is not part of the health gate.
+func (l *LiveUpgrade) reloadProxy(ctx context.Context) {
+	if states, err := l.Manager.Containers(ctx, l.Backup.Project); err == nil && states["frontend"].Running {
+		_, _ = l.Manager.Exec(ctx, l.Backup.Project, "frontend", []string{"nginx", "-s", "reload"})
+	}
 }

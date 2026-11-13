@@ -10,7 +10,8 @@
     "authn",
     "thingmodel",
     "automation",
-    "brokerscope"
+    "brokerscope",
+    "system"
   ],
   "hosted_gateways": [],
   "sql_servers": [

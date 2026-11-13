@@ -257,3 +257,20 @@ class FreshInstallCompose(unittest.TestCase):
         config['services']['backend']['environment']['GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST'] = '${HOST}'
         with self.assertRaises(update.UpdateError):
             update.validate_config(config)  # an unresolved host is not
+
+
+class FreshInstallPrepareGuard(unittest.TestCase):
+    def test_prepare_guard_accepts_unresolved_password_reference_only(self):
+        spec = importlib.util.spec_from_file_location('tp_prepare_guard', REPO / 'config/native/prepare.py')
+        prepare = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(prepare)
+        env = {'GOTP_DB_PSQL_HOST': 'postgres', 'GOTP_DB_PSQL_PORT': '5432', 'GOTP_DB_PSQL_USERNAME': 'postgres', 'GOTP_DB_PSQL_DBNAME': 'd',
+               'GOTP_RELATIONAL_DRIVER': 'postgres', 'GOTP_RELATIONAL_POSTGRES_PLATFORM_HOST': 'postgres',
+               'GOTP_RELATIONAL_POSTGRES_PLATFORM_PORT': '5432', 'GOTP_RELATIONAL_POSTGRES_PLATFORM_DATABASE': 'd',
+               'GOTP_RELATIONAL_POSTGRES_PLATFORM_USERNAME': 'postgres',
+               'GOTP_RELATIONAL_POSTGRES_PLATFORM_PASSWORD': '${TP_DATABASE_PASSWORD:-x}'}
+        config = {'services': {'postgres': {}, 'backend': {'environment': env}}}
+        prepare.validate_supported_backend_database(config)
+        env['GOTP_RELATIONAL_POSTGRES_PLATFORM_DATABASE'] = '${DB}'
+        with self.assertRaises(RuntimeError):
+            prepare.validate_supported_backend_database(config)

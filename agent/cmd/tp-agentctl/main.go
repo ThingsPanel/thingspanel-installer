@@ -36,9 +36,9 @@ func main() {
 		if sub == "backup" && flag.NArg() >= 3 {
 			sub = "backup/" + flag.Arg(2)
 		}
-		valid := map[string]bool{"status": true, "verify": true, "restart": true, "upgrade": true, "backup/create": true, "backup/list": true, "backup/verify": true, "backup/delete": true, "backup/restore": true}
+		valid := map[string]bool{"status": true, "verify": true, "updates": true, "check": true, "restart": true, "upgrade": true, "backup/create": true, "backup/list": true, "backup/verify": true, "backup/delete": true, "backup/restore": true}
 		if flag.NArg() < 2 || !valid[sub] {
-			fmt.Fprintln(os.Stderr, "usage: tp-agentctl -socket SYS -token-file F system status|verify|restart|upgrade [wait_seconds=N] [to=vX.Y.Z] [scope=control|full] | system backup create|list|verify|restore|delete [name=...]")
+			fmt.Fprintln(os.Stderr, "usage: tp-agentctl -socket SYS -token-file F system status|verify|updates|check|restart|upgrade [wait_seconds=N] [to=vX.Y.Z] [scope=control|full] | system backup create|list|verify|restore|delete [name=...]")
 			os.Exit(2)
 		}
 		skip := 2

@@ -115,6 +115,10 @@ type UpgradeSteps interface {
 	RestoreSnapshot(ctx context.Context, name string) error
 	ComposeUp(ctx context.Context) error
 	Verify(ctx context.Context) error
+	// UpdateProxy brings the reverse proxy (frontend) to the new configuration once the stack is healthy. It is
+	// kept out of ComposeUp on purpose: compose recreates a service together with a dependency it was waiting
+	// for, and a failed new backend must never take the maintenance page down. Best effort, never fatal.
+	UpdateProxy(ctx context.Context) error
 	// AbortHelpers removes helper containers a dead Agent left running (a half-finished `compose up`).
 	AbortHelpers(ctx context.Context) error
 }
@@ -314,6 +318,9 @@ func (u *Upgrader) Run(ctx context.Context, to string, report func(step string, 
 	if err := u.Steps.Verify(ctx); err != nil {
 		return u.rollback(ctx, s, CodeUpgradeGate, report)
 	}
+	if err := u.Steps.UpdateProxy(ctx); err != nil {
+		u.logf("upgrade: proxy update failed (the stack itself is healthy): %v", err)
+	}
 	u.Steps.Maintenance(false)
 	u.finish(s, UpCommitted, "")
 	return nil
@@ -365,6 +372,9 @@ func (u *Upgrader) rollback(ctx context.Context, s *UpgradeState, cause string, 
 		u.logf("upgrade: rollback failed")
 		u.finish(s, UpNeedsHuman, CodeUpgradeNeedsHuman)
 		return CodedError{CodeUpgradeNeedsHuman}
+	}
+	if err := u.Steps.UpdateProxy(ctx); err != nil {
+		u.logf("upgrade: proxy update failed (the stack itself is healthy): %v", err)
 	}
 	u.Steps.Maintenance(false)
 	u.finish(s, UpRolledBack, CodeUpgradeRolledBack)

@@ -124,6 +124,10 @@ func (f fakeSteps) ComposeUp(context.Context) error {
 	}
 	return nil
 }
+func (f fakeSteps) UpdateProxy(context.Context) error {
+	f.w.calls = append(f.w.calls, "update-proxy")
+	return nil
+}
 func (f fakeSteps) AbortHelpers(context.Context) error {
 	f.w.calls = append(f.w.calls, "abort-helpers")
 	return nil
@@ -439,5 +443,26 @@ func TestUpgradeRefusesUnresolvedState(t *testing.T) {
 	os.WriteFile(u.StateFile, []byte(`{not json`), 0o600)
 	if got := code(u.Run(context.Background(), "v1.3.2", nil)); got != CodeUpgradeUnresolved {
 		t.Fatalf("corrupt state: %q", got)
+	}
+}
+
+// The proxy is only touched after the stack passed its health gate: a failed new version must never take the
+// maintenance page down.
+func TestUpgradeUpdatesTheProxyOnlyAfterTheGatePasses(t *testing.T) {
+	w := newWorld()
+	if err := newUpgrader(t, w).Run(context.Background(), "v1.3.1", nil); err != nil {
+		t.Fatal(err)
+	}
+	order := strings.Join(w.calls, ",")
+	if strings.Index(order, "verify") > strings.Index(order, "update-proxy") || !strings.Contains(order, "update-proxy") {
+		t.Fatalf("proxy must be updated after the gate: %s", order)
+	}
+	w = newWorld()
+	w.fail["verify"] = true
+	_ = newUpgrader(t, w).Run(context.Background(), "v1.3.1", nil)
+	order = strings.Join(w.calls, ",")
+	// once for the rollback's own successful gate, never before the failed gate
+	if strings.Index(order, "update-proxy") != strings.LastIndex(order, "update-proxy") || strings.Index(order, "update-proxy") < strings.LastIndex(order, "verify") {
+		t.Fatalf("proxy touched around a failed gate: %s", order)
 	}
 }

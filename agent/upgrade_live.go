@@ -248,10 +248,37 @@ func (l *LiveUpgrade) upServices(ctx context.Context) []string {
 // ComposeUp runs `docker compose up -d --no-deps --pull never <services>` in the helper container. Compose
 // recreates exactly the services whose configuration or image changed and leaves the others running.
 func (l *LiveUpgrade) ComposeUp(ctx context.Context) error {
-	services := l.upServices(ctx)
+	var services []string
+	for _, s := range l.upServices(ctx) {
+		if s != proxyService {
+			services = append(services, s)
+		}
+	}
 	if len(services) == 0 {
 		return errors.New("no services to start")
 	}
+	return l.composeUp(ctx, services)
+}
+
+// proxyService is the reverse proxy (it serves the maintenance page), see UpdateProxy.
+const proxyService = "frontend"
+
+// UpdateProxy recreates the proxy if its image or configuration changed (it is not in ComposeUp), then makes it
+// reload its configuration file.
+func (l *LiveUpgrade) UpdateProxy(ctx context.Context) error {
+	for _, s := range l.upServices(ctx) {
+		if s == proxyService {
+			if err := l.composeUp(ctx, []string{proxyService}); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	l.reloadProxy(ctx)
+	return nil
+}
+
+func (l *LiveUpgrade) composeUp(ctx context.Context, services []string) error {
 	host := l.cfg().HostRoot
 	argv := []string{"compose", "--project-name", l.Backup.Project, "--project-directory", host, "-f", filepath.Join(host, "docker-compose.yml")}
 	if _, err := os.Stat(filepath.Join(l.Config.Backup.Root, "docker-compose.override.yml")); err == nil {
@@ -270,7 +297,6 @@ func (l *LiveUpgrade) ComposeUp(ctx context.Context) error {
 	if code != 0 {
 		return fmt.Errorf("compose up failed (exit %d): %s", code, strings.TrimSpace(tail))
 	}
-	l.reloadProxy(ctx)
 	return nil
 }
 

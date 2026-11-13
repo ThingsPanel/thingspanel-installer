@@ -37,6 +37,7 @@ func main() {
 	systemSocket := flag.String("system-socket", "", "system role: Unix socket for the system API (separate from -socket; never mount it into the platform backend)")
 	systemTokenFile := flag.String("system-token-file", "", "system role: bearer token file (0600, >= 32 bytes, must differ from -token-file)")
 	systemConfigFile := flag.String("system-config", "", "system role: fixed stack description (compose project and components), written by the installer")
+	provisionAPI := flag.String("provision-system-api", "", "write the system API token (once) into this directory, then exit; the directory also holds the system socket")
 	provision := flag.String("provision-system", "", "write the reviewed system-role config (system.json) and, once, a system token into this directory, then exit; needs -project")
 	releaseSource := flag.String("release-source", "", "with -provision-system: HTTPS base URL of the signed release; enables `system upgrade`")
 	releaseTrust := flag.String("release-trust-root", "", "with -release-source: release trust root (PEM) as seen inside this container")
@@ -51,6 +52,12 @@ func main() {
 		}
 		if err := agent.Initialize(*statePath, *initState); err != nil {
 			log.Fatal(err)
+		}
+		return
+	}
+	if *provisionAPI != "" {
+		if err := agent.ProvisionSystemToken(*provisionAPI); err != nil {
+			log.Fatalf("provision system api: %v", err)
 		}
 		return
 	}
@@ -189,6 +196,7 @@ func main() {
 				upgrader := &agent.Upgrader{Steps: live, StateFile: systemCfg.Upgrade.StateFile, LockDir: filepath.Join(systemCfg.Backup.Root, ".thingspanel-update"),
 					Logf: log.Printf}
 				systemService.EnableUpgrade(upgrader)
+				systemService.EnableUpdateCheck(&agent.UpdateChecker{Config: *systemCfg.Upgrade, Download: download, Current: backupService.PlatformVersionLive})
 				// An upgrade interrupted by a crash is cleaned up or rolled back before anything else may start.
 				if st, err := upgrader.Load(); err != nil {
 					log.Printf("upgrade state is unreadable; leaving it for a person: %v", err)

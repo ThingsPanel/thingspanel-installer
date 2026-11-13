@@ -297,6 +297,11 @@ func (s *BackupService) platformVersion(ctx context.Context) string {
 	return "unknown"
 }
 
+// PlatformVersionLive reports the running platform version (or the last one it reported); ok is false if unknown.
+func (s *BackupService) PlatformVersionLive(ctx context.Context) (string, bool) {
+	return s.platformVersionLive(ctx)
+}
+
 func (s *BackupService) platformVersionLive(ctx context.Context) (string, bool) {
 	var out bytes.Buffer
 	code, _, err := s.Runner.ExecStream(ctx, s.Project, s.Config.VersionService, s.Config.VersionArgv, &out)

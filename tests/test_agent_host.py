@@ -51,8 +51,8 @@ class SystemRole(unittest.TestCase):
         calls, stop, ensure, root = self.run_up(True)
         run = next(c for c in calls if c[:3] == ['docker', 'run', '-d'])
         joined = ' '.join(run)
-        self.assertIn('-system-socket /run/agent/system/agent-system.sock', joined)
-        self.assertIn('-system-token-file /run/agent/system/token', joined)
+        self.assertIn('-system-socket /run/agent/system-api/agent-system.sock', joined)
+        self.assertIn('-system-token-file /run/agent/system-api/token', joined)
         self.assertIn('-system-config /run/agent/system/system.json', joined)
         # The platform backend mounts only agent/run; the system socket must live in a different directory.
         self.assertIn('%s:/run/agent/system' % (root / 'agent/system').resolve(), joined)
@@ -61,6 +61,9 @@ class SystemRole(unittest.TestCase):
         self.assertIn('--network', run)
         provision = next(c for c in calls if '-provision-system' in c)
         self.assertEqual(provision[provision.index('-provision-system') + 1], '/run/agent/system')
+        api = next(c for c in calls if '-provision-system-api' in c)
+        self.assertEqual(api[api.index('-provision-system-api') + 1], '/run/agent/system-api')
+        self.assertIn('%s:/run/agent/system-api' % (root / 'agent/system-api').resolve(), joined)
         stop.assert_called_once()          # the Python watcher is stopped, not started beside the Agent
         ensure.assert_not_called()
 

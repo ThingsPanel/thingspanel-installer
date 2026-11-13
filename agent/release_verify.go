@@ -188,28 +188,37 @@ func cleanReleasePath(raw any) (string, error) {
 // that every given file (manifest path -> local copy) is listed with matching size and SHA-256. A file the
 // manifest does not list, a symlink or a missing file is rejected; listed files that are not given are not
 // checked (this is what an updater's staged files need). It returns the release version.
-func VerifyFiles(manifest, signature []byte, policy ReleasePolicy, expectedVersion string, files map[string]string) (string, error) {
+// ReleaseInfo is what a verified manifest says about the release itself.
+type ReleaseInfo struct {
+	Version   string
+	NotBefore int64
+	ExpiresAt int64
+}
+
+// verifyHeader checks signature, identity (publisher, version), revocation and validity window, and returns the
+// release and its file table.
+func verifyHeader(manifest, signature []byte, policy ReleasePolicy, expectedVersion string) (ReleaseInfo, map[string]releaseEntry, error) {
 	key, err := LoadTrustRoot(policy.TrustRoot)
 	if err != nil {
-		return "", err
+		return ReleaseInfo{}, nil, err
 	}
 	sum := sha256.Sum256(manifest)
 	if !ecdsa.VerifyASN1(key, sum[:], signature) {
-		return "", relErr("bad_signature")
+		return ReleaseInfo{}, nil, relErr("bad_signature")
 	}
 	rel, expected, err := parseManifest(manifest)
 	if err != nil {
-		return "", err
+		return ReleaseInfo{}, nil, err
 	}
 	if rel.Publisher != policy.Publisher {
-		return "", relErr("wrong_publisher")
+		return ReleaseInfo{}, nil, relErr("wrong_publisher")
 	}
 	if expectedVersion != "" && rel.Version != expectedVersion {
-		return "", relErr("version_mismatch")
+		return ReleaseInfo{}, nil, relErr("version_mismatch")
 	}
 	for _, v := range append(append([]string{}, policy.Revoked...), rel.revokedInside...) {
 		if v == rel.Version {
-			return "", relErr("revoked")
+			return ReleaseInfo{}, nil, relErr("revoked")
 		}
 	}
 	now := policy.Now
@@ -217,10 +226,24 @@ func VerifyFiles(manifest, signature []byte, policy ReleasePolicy, expectedVersi
 		now = time.Now().Unix()
 	}
 	if now < rel.NotBefore {
-		return "", relErr("not_yet_valid")
+		return ReleaseInfo{}, nil, relErr("not_yet_valid")
 	}
 	if now >= rel.Expires {
-		return "", relErr("expired")
+		return ReleaseInfo{}, nil, relErr("expired")
+	}
+	return ReleaseInfo{Version: rel.Version, NotBefore: rel.NotBefore, ExpiresAt: rel.Expires}, expected, nil
+}
+
+// VerifyManifest verifies a manifest on its own (no payload): used to answer "which release is available".
+func VerifyManifest(manifest, signature []byte, policy ReleasePolicy) (ReleaseInfo, error) {
+	info, _, err := verifyHeader(manifest, signature, policy, "")
+	return info, err
+}
+
+func VerifyFiles(manifest, signature []byte, policy ReleasePolicy, expectedVersion string, files map[string]string) (string, error) {
+	rel, expected, err := verifyHeader(manifest, signature, policy, expectedVersion)
+	if err != nil {
+		return "", err
 	}
 	if len(files) == 0 {
 		return "", relErr("malformed_manifest")

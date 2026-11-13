@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -27,7 +28,11 @@ type SystemService struct {
 	backup   *BackupService
 	restore  *RestoreService
 	upgrade  *Upgrader
+	updates  *UpdateChecker
 }
+
+// EnableUpdateCheck turns on `system updates`.
+func (s *SystemService) EnableUpdateCheck(u *UpdateChecker) { s.updates = u }
 
 // EnableUpgrade turns on `system upgrade` (needs operations enabled).
 func (s *SystemService) EnableUpgrade(u *Upgrader) { s.upgrade = u }
@@ -70,6 +75,9 @@ type systemResponse struct {
 	Backups      []BackupInfo     `json:"backups,omitempty"`
 	Backup       *BackupSummary   `json:"backup,omitempty"`
 	Upgrade      *UpgradeState    `json:"upgrade,omitempty"`
+	Check        *CheckResult     `json:"check,omitempty"`
+	Updates      *UpdateInfo      `json:"updates,omitempty"`
+	Code         string           `json:"code,omitempty"`
 }
 
 func (s *SystemService) Handler() http.Handler {
@@ -101,6 +109,28 @@ func (s *SystemService) Handler() http.Handler {
 			return systemResponse{Error: err.Error()}
 		}
 		return systemResponse{OK: true, Role: "system", Operation: &op}
+	}))
+	mux.HandleFunc("/v1/system/check", s.guard(func(ctx context.Context, _ systemRequest) systemResponse {
+		if s.operator == nil {
+			return systemResponse{Error: "restart is not enabled"}
+		}
+		res := s.operator.CheckConfigOnce(ctx)
+		return systemResponse{OK: true, Role: "system", Check: &res}
+	}))
+	mux.HandleFunc("/v1/system/updates", s.guard(func(ctx context.Context, _ systemRequest) systemResponse {
+		if s.updates == nil {
+			return systemResponse{Error: "update check is not enabled", Code: CodeUpdateNoSource}
+		}
+		info, err := s.updates.Check(ctx)
+		if err != nil {
+			var ce CodedError
+			code := "updates_failed"
+			if errors.As(err, &ce) {
+				code = ce.Code
+			}
+			return systemResponse{Error: "update check failed", Code: code}
+		}
+		return systemResponse{OK: true, Role: "system", Updates: &info}
 	}))
 	mux.HandleFunc("/v1/system/upgrade", s.guard(func(ctx context.Context, req systemRequest) systemResponse {
 		if s.upgrade == nil || s.operator == nil {

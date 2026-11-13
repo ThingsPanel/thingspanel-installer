@@ -81,8 +81,8 @@ func productionSystemConfig(project string) SystemConfig {
 	}
 }
 
-// ProvisionSystem writes DIR/system.json and, when absent, DIR/token. DIR is created 0700. An existing token is
-// kept so a restart of the Agent does not invalidate the credentials operators hold.
+// ProvisionSystem writes DIR/system.json. DIR is created 0700 and holds only the Agent's own system state (the
+// config and the upgrade state file); it is never mounted into a platform container.
 func ProvisionSystem(dir, project string, up *ProvisionUpgrade) error {
 	cfg := ProductionSystemConfig(project, up)
 	if err := cfg.Validate(); err != nil {
@@ -98,7 +98,18 @@ func ProvisionSystem(dir, project string, up *ProvisionUpgrade) error {
 	if err != nil {
 		return err
 	}
-	if err := atomicWrite(filepath.Join(dir, "system.json"), append(raw, '\n'), 0o644, false); err != nil {
+	return atomicWrite(filepath.Join(dir, "system.json"), append(raw, '\n'), 0o644, false)
+}
+
+// ProvisionSystemToken creates DIR/token (the system bearer token) when it is absent or too short, keeping a
+// good one so a restart does not invalidate the credentials operators hold. DIR also receives the system
+// socket, and it is the one directory the platform's Encore container mounts (read-only), so that DIR holds
+// nothing but the socket and this token.
+func ProvisionSystemToken(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
 	tokenPath := filepath.Join(dir, "token")

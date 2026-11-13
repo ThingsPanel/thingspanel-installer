@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +20,9 @@ import (
 )
 
 const defaultReleasePublisher = "https://github.com/ThingsPanel/thingspanel-installer/.github/workflows/release.yml"
+
+// imageRefPattern is deliberately plain: registry/path:tag or @sha256:digest, no whitespace or shell characters.
+var imageRefPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$`)
 
 var composeServiceName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 
@@ -39,7 +43,7 @@ type UpgradeConfig struct {
 func (c *UpgradeConfig) validate(components map[string]bool) error {
 	if !strings.HasPrefix(c.Source, "https://") || !filepath.IsAbs(c.TrustRoot) || !filepath.IsAbs(c.HostRoot) ||
 		!filepath.IsAbs(c.StateFile) || c.ComposeImage == "" || strings.ContainsAny(c.ComposeImage, " \t\n") ||
-		len(c.Services) == 0 || len(c.Services) > 64 || c.VerifySecs < 0 || c.VerifySecs > 3600 {
+		!imageRefPattern.MatchString(c.ComposeImage) || len(c.Services) == 0 || len(c.Services) > 64 || c.VerifySecs < 0 || c.VerifySecs > 3600 {
 		return ErrSystemConfig
 	}
 	if c.CAFile != "" && !filepath.IsAbs(c.CAFile) {
@@ -108,7 +112,20 @@ func (l *LiveUpgrade) Preflight(ctx context.Context, to string) error {
 	if _, err := os.Stat(l.cfg().TrustRoot); err != nil {
 		return errors.New("release trust root is missing")
 	}
-	return l.ensureImage(ctx, l.cfg().ComposeImage)
+	return l.checkHelperImage(ctx)
+}
+
+// checkHelperImage: the helper image is pulled at install/upgrade time; if the host has neither it nor a
+// registry, say so precisely (the preflight runs before anything is stopped, snapshotted or replaced).
+func (l *LiveUpgrade) checkHelperImage(ctx context.Context) error {
+	if err := l.ensureImage(ctx, l.cfg().ComposeImage); err != nil {
+		image := l.cfg().ComposeImage
+		log.Printf("UPGRADE-HELPER-IMAGE: %s is not on this host and could not be pulled (%v). Upgrade not started, nothing changed. "+
+			"Offline: on a machine with Internet run `docker pull %s && docker save %s -o helper.tar`, copy helper.tar here, run `docker load -i helper.tar`, then retry.",
+			image, err, image, image)
+		return CodedError{CodeUpgradeHelperImage}
+	}
+	return nil
 }
 
 func (l *LiveUpgrade) ensureImage(ctx context.Context, ref string) error {

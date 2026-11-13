@@ -93,5 +93,8 @@ install/upgrade 每次都在 `start_plugin_agent` 里重跑 `agent_host.py up --
 - 发布负责人：生成 beta 测试密钥并保管；决定 beta 发布源地址；准备带 `system` 角色的 Agent 二进制与插件目录/bundle（B2）。
 - 验证：用 runbook 在一台**全新机器**上用 beta 发布源走一遍（包括 `TP_BUNDLE_*` 路径——这条路径本卡只有单元测试，没有真实验收）。
 
+## 遗留事项的任务说明
+见 `R9-FOLLOWUP-BRIEFS.md`（后端、前端、发布负责人、待验证项，可直接复制给对应会话）。
+
 ## 没动的
 后端与前端仓库（只读检查）；`/api/system/*` 返回格式没有需求变更，只需要上面第 3 条的码表。

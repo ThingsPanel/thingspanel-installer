@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh managed Modbus MQTT device scope
+
+[Timer]
+OnBootSec=10s
+OnUnitInactiveSec=10s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

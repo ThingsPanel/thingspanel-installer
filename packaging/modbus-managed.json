@@ -1,0 +1,35 @@
+{
+  "id": "modbus",
+  "display_name": "Modbus",
+  "version": "1.0.0",
+  "kind": "service",
+  "description": "Connect Modbus TCP and RTU gateways and their subdevices.",
+  "entrypoint": "/app/tp-plugin-modbus",
+  "env": [
+    "MODBUS_CONFIG_FILE=/app/config.yaml",
+    "MODBUS_THINGSPANEL_MANAGED=true",
+    "MODBUS_THINGSPANEL_ADDRESS=http://backend:9999",
+    "MODBUS_MQTT_BROKER=tcp://mosquitto:1883"
+  ],
+  "env_from_stack": {
+    "MODBUS_MQTT_USERNAME": "TP_MODBUS_MQTT_USER",
+    "MODBUS_MQTT_PASSWORD": "TP_MODBUS_MQTT_PASSWORD"
+  },
+  "identity": {"token_env": "MODBUS_THINGSPANEL_TOKEN"},
+  "health": {"port": 1503, "path": "/health"},
+  "platform": {
+    "binding": "none",
+    "service_identifier": "MODBUS",
+    "network_alias": "tp-plugin-modbus",
+    "http_port": 1503,
+    "service_plugin": {
+      "name": "Modbus",
+      "service_type": 1,
+      "description": "Managed Modbus TCP and RTU protocol plugin",
+      "config": {
+        "sub_topic_prefix": "plugin/modbus/",
+        "http_address": "{alias}:{http_port}"
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+[Unit]
+Description=Reconcile managed Modbus MQTT device scope
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/tp-community-main-20261028/modbus-runtime/scope.py
+TimeoutStartSec=150

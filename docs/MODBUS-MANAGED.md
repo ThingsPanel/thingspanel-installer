@@ -11,6 +11,8 @@
 
 ## 主线测试服准备
 
+- 主线 Gin 运行在宿主机，需要与 HA、HTTP 相同的回调代理。`tools/main47/modbus_callback.go` 编译为 Linux amd64 二进制，放入 `modbus-runtime/modbus-callback`，执行 `prepare_modbus_callback.py --sha256 <二进制摘要>`。代理只发布 `127.0.0.1:1503`，宿主机别名 `tp-plugin-modbus` 指向回环，再经现有容器网络访问受管插件。
+
 - Agent 使用的主机栈配置需提供 `TP_MODBUS_MQTT_USER` 和 `TP_MODBUS_MQTT_PASSWORD`。主线测试服的专用用户名为 `tp-main47-modbus`。同步使用同一份私有凭据配置 `modbus-runtime/mqtt.private.json`。
 - 将 `tools/main47/modbus_scope.py` 放入 `modbus-runtime/scope.py`，部署同目录的 `modbus-scope.service` 和 `modbus-scope.timer`。它在安装代次有效时配置专用 Broker 账号，只授予符合条件的 Modbus 网关及其同租户、同协议子设备。代次停用时移除账号。范围实际改变时会重启现有 Broker Owner 和 Mosquitto，启用定时器前确认该环境允许短暂重连。
 - 已有设备 TCP 入口应经受控 TCP 转发指向容器的 `1502`。切换前确认旧 Modbus 的监听端口和设备流量，验收时使用独立测试入口；平台内部的 `1503` 供回调和健康检查使用。

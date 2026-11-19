@@ -1,4 +1,4 @@
-# v1.3.0 一键安装
+# 社区版原生服务安装
 
 Linux 服务器准备好 Docker Compose v2、Python 3 和 OpenSSL 后，执行原来的命令：
 
@@ -12,18 +12,15 @@ curl -fsSL https://install.thingspanel.io/install.sh | sh
 
 社区数据库按 `sys_version` 升级；Broker 迁移及 `device_metadata`、`automation`、`notification` 三个资源库按迁移记录执行。自托管 Encore 镜像不自动执行 SQL，由安装脚本完成。重复安装保留 `.env`、数据和迁移记录；已有库密码必须与 `.env` 一致。凭据只保存在本机，不提交仓库。
 
-Encore/通知核心共用 `thingspanel-encore:v1.3.0`；Mosquitto/Owner 共用 `thingspanel-mosquitto:v1.3.0`，分别运行不同进程。后端镜像也被定时唤醒进程复用。所有镜像由组件仓库的发布 Action 上传阿里云，安装器负责拉取与启动。
+Encore/通知核心共用 `thingspanel-encore:v1.4.0`；Mosquitto/Owner 共用 `thingspanel-mosquitto:v1.4.0`，分别运行不同进程。后端镜像也被定时唤醒进程复用。所有镜像由组件仓库的发布 Action 上传阿里云，安装器负责拉取与启动。
 
 通知未配置插件时可管理通知页面，外发全部拒绝；实际发送仍需配置通知渠道和 SMTP。内部 TLS 的 8443 端口不对宿主机开放。MQTT 默认是 TCP 1883，不提供旧 GMQTT 的 WebSocket 端口。
 
-HTTP/Modbus 使用安装时生成的独立协议服务账号。新装没有设备时只允许建立连接，不获得任何发布或订阅权限。平台命令和协议插件的数据访问仍限于明确登记的设备；创建或导入设备后，维护人员在安装目录执行：
+受管插件目录使用官方签名。安装器按 Docker 架构验证目录、Agent 和目录中各镜像的摘要，导入镜像后检查实际镜像 ID 和架构。已激活目录在新版下载失败时可继续使用。Linux 上 Agent 启用后，Broker 范围同步会跟踪设备以及受管插件的有效安装代次。受管 HTTP 和 Modbus 使用各自的 MQTT 账号，空设备范围只允许连接。
 
-```sh
-python3 config/native/prepare.py --refresh-devices
-docker compose restart broker-owner mosquitto backend http_adapter modbus_service
-```
+当前 Compose 为全新安装准备受管插件入口。超管在「设备 → 插件安装」启用插件后，HTTP 设备可访问 19090 端口的上报、轮询和回执接口，Modbus 网关从 502 端口连接。插件健康和表单回调在 Compose 网络内访问。
 
-单个服务允许列表最多 256 个设备；超出需规划独立服务身份。以上是当前 Broker 的设备范围管理要求，不是安装步骤。
+公开站点当前发布 Home Assistant 目录。发布此 Compose 时需要同时交付 amd64、arm64 的三插件签名目录和对应 Release 制品，才能从页面安装 HTTP 和 Modbus。受管 Modbus 制品流程见 [Modbus 接入说明](../../docs/MODBUS-MANAGED.md)。
 
 查看运行状态和错误：
 

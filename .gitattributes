@@ -1,0 +1,8 @@
+/config/native/update.py text eol=lf
+/config/native/release_manifest.py text eol=lf
+/tools/agent_host.py text eol=lf
+/tools/plugin_bundle.py text eol=lf
+/tools/plugin_catalog.py text eol=lf
+/tools/scope_sync.py text eol=lf
+/plugins/catalog-linux-*.json -text
+/plugins/catalog-linux-*.json.sig binary

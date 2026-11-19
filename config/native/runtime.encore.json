@@ -9,6 +9,7 @@
   "hosted_services": [
     "authn",
     "thingmodel",
+    "devicemetadata",
     "automation"
   ],
   "hosted_gateways": [],

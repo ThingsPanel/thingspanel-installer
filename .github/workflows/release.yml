@@ -42,6 +42,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify plugin bundle and catalog tools
+        run: python3 -B -m unittest discover -s tools -p 'test_*.py'
+
       - name: Create test .env
         run: |
           cat > .env << 'EOF'
@@ -55,6 +58,7 @@ jobs:
           TP_NATIVE_DB_PASSWORD=syntax-check-only
           TP_NOTIFICATION_KEYRING_B64=syntax-check-only
           EOF
+          python3 config/native/prepare.py
 
       - name: Validate docker-compose syntax
         run: docker compose config --quiet

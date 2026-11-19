@@ -15,6 +15,8 @@ on:
       - 'uninstall.ps1'
       - '*.bash'
       - 'config/native/**'
+      - 'tools/**'
+      - 'plugins/**'
       - 'packaging/**'
       - '.github/workflows/validate.yml'
       - '.github/workflows/release.yml'
@@ -24,6 +26,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify plugin bundle and catalog tools
+        run: python3 -B -m unittest discover -s tools -p 'test_*.py'
 
       - name: Create test .env
         run: |

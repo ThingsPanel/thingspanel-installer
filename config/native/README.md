@@ -16,6 +16,8 @@ Encore/通知核心共用 `thingspanel-encore:v1.4.0`；Mosquitto/Owner 共用 `
 
 通知未配置插件时可管理通知页面，外发全部拒绝；实际发送仍需配置通知渠道和 SMTP。内部 TLS 的 8443 端口不对宿主机开放。MQTT 默认是 TCP 1883，不提供旧 GMQTT 的 WebSocket 端口。
 
+安装器为原生设备凭据生成持久化密钥，并通过 Docker 内网 TLS 连接 Broker Owner 完成注册。需要在设备「连接」页显示 MQTT 服务器地址时，在 `.env` 设置 `TP_DEVICE_CONNECTION_ENDPOINT` 为设备实际可达的地址，例如 `mqtt://iot.example.com:1883`。此设置只影响页面显示和连接信息 API。
+
 受管插件目录使用官方签名。安装器按 Docker 架构验证目录、Agent 和目录中各镜像的摘要，导入镜像后检查实际镜像 ID 和架构。已激活目录在新版下载失败时可继续使用。Linux 上 Agent 启用后，Broker 范围同步会跟踪设备以及受管插件的有效安装代次。受管 HTTP 和 Modbus 使用各自的 MQTT 账号，空设备范围只允许连接。
 
 当前 Compose 为全新安装准备受管插件入口。超管在「设备 → 插件安装」启用插件后，HTTP 设备可访问 19090 端口的上报、轮询和回执接口，Modbus 网关从 502 端口连接。插件健康和表单回调在 Compose 网络内访问。

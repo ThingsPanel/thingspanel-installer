@@ -72,9 +72,12 @@ COMMON = (
     ('config/native/tick.sh', 0o644), ('config/native/README.md', 0o644),
 )
 LEGACY_WATCHED = ('.env', 'config/native/plugin-token')
-ACTIVATION_FILES = ('.env', 'config/native/broker/plugin-token',
-                    'config/native/broker/owner-tokens.json', 'config/native/broker/services.json')
-WATCHED = LEGACY_WATCHED + ('config/native/owner-tokens.json', 'config/native/services.json') + ACTIVATION_FILES[1:]
+BROKER_TLS_FILES = ('config/native/broker/owner.pem', 'config/native/broker/owner.crt')
+BROKER_ACTIVATION_FILES = ('config/native/broker/plugin-token', 'config/native/broker/owner-tokens.json',
+                           'config/native/broker/services.json')
+PRE_TLS_WATCHED = LEGACY_WATCHED + ('config/native/owner-tokens.json', 'config/native/services.json') + BROKER_ACTIVATION_FILES
+ACTIVATION_FILES = ('.env',) + BROKER_ACTIVATION_FILES + BROKER_TLS_FILES
+WATCHED = PRE_TLS_WATCHED + BROKER_TLS_FILES
 
 
 def make_directories(path, mode=0o755):
@@ -440,7 +443,7 @@ class Transaction:
                         raise ValueError()
                 if value['mode'] > 0o7777:
                     raise ValueError()
-            if not isinstance(data['watched'], dict) or set(data['watched']) not in (set(WATCHED), set(LEGACY_WATCHED)):
+            if not isinstance(data['watched'], dict) or set(data['watched']) not in (set(WATCHED), set(PRE_TLS_WATCHED), set(LEGACY_WATCHED)):
                 raise ValueError()
             for value in data['watched'].values():
                 fingerprint(value, nullable=True)
@@ -1350,7 +1353,8 @@ def main():
     args = parser.parse_args()
     try:
         root = Path(os.path.abspath(args.root))
-        if not args.recover_config_only and not (root / 'config/native/internal.crt').is_file() and shutil.which('openssl') is None:
+        certificates_present = all((root / relative).is_file() for relative in BROKER_TLS_FILES + ('config/native/internal.crt',))
+        if not args.recover_config_only and not certificates_present and shutil.which('openssl') is None:
             raise UpdateError('OpenSSL is required by native certificate preparation; no configuration was replaced')
         policy = None
         if args.release_trust_root or args.require_signed_release:

@@ -239,6 +239,26 @@ def write_configuration_file(path, content, mode, ownership=None, lock_held=Fals
         files.durable_bytes(path, content, mode, owner)
 
 
+def configure_broker_tls():
+    files = update_files()
+    identity = files.safe_target(CONFIG, 'broker/owner.pem')
+    cert = files.safe_target(CONFIG, 'broker/owner.crt')
+    if files.file_info(identity) is None:
+        if files.file_info(cert) is not None:
+            raise RuntimeError('Broker TLS private identity is missing; preserve the certificate for review')
+        with tempfile.TemporaryDirectory(prefix='tp-broker-tls-') as temporary:
+            key, public = Path(temporary) / 'key.pem', Path(temporary) / 'cert.pem'
+            command('openssl', 'req', '-x509', '-nodes', '-newkey', 'rsa:2048', '-days', '3650',
+                    '-subj', '/CN=broker-owner', '-addext', 'subjectAltName=DNS:broker-owner,IP:127.0.0.1',
+                    '-keyout', str(key), '-out', str(public))
+            owner = {'uid': 1883, 'gid': 1883} if os.name == 'posix' and os.geteuid() == 0 else None
+            # Keep the identity intact if setup exits before distributing the public certificate.
+            write_configuration_file(identity, key.read_bytes() + public.read_bytes(), 0o440, owner)
+    if files.file_info(cert) is None:
+        public = command('openssl', 'x509', '-in', str(identity), '-outform', 'PEM')
+        write_configuration_file(cert, (public + '\n').encode('ascii'), 0o444)
+
+
 def secret_value(value, key, from_dotenv=False):
     if value is None:
         return None
@@ -342,6 +362,9 @@ def configure():
                 'TP_PROTOCOL_MQTT_USER': 'tp-community-protocols', 'TP_PROTOCOL_MQTT_PASSWORD': secrets.token_hex(32),
                 'TP_DEPLOYMENT_ID': 'community', 'TP_BROKER_CELL': CELL, 'TP_BROKER_INSTANCE': INSTANCE, 'TP_MQTT_CLIENT_ID': CLIENT,
                 'TP_NOTIFICATION_KEYRING_B64': base64.b64encode(json.dumps({'main': base64.b64encode(secrets.token_bytes(32)).decode()}).encode()).decode()}
+    defaults['METADATA_CREDENTIAL_KEYRING_B64'] = base64.b64encode(
+        json.dumps({'main': base64.b64encode(secrets.token_bytes(32)).decode()}).encode()).decode()
+    defaults['METADATA_CREDENTIAL_ACTIVE_KEY_REF'] = 'main'
     for identifier, prefix, _ in MANAGED_PROTOCOLS.values():
         defaults[prefix + '_USER'] = 'tp-community-' + identifier.lower()
         defaults[prefix + '_PASSWORD'] = secrets.token_hex(32)
@@ -403,6 +426,7 @@ def configure():
         broker_dir = services_file.parent
         os.chown(broker_dir, 0, 1883)
         broker_dir.chmod(0o750)
+    configure_broker_tls()
     certificate = CONFIG / 'internal.crt'
     if not certificate.exists():
         command('openssl', 'req', '-x509', '-nodes', '-newkey', 'rsa:2048', '-days', '3650',

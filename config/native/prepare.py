@@ -748,7 +748,13 @@ def apply_migrations(database, component, paths):
 def verify():
     rendered = json.loads(command('docker', 'compose', 'config', '--format', 'json'))
     published = {row['target']: int(row['published']) for row in rendered['services']['frontend']['ports']}
-    endpoints = [('/api/v1/sys_version', 200), ('/automation-core/v1/health', 200), ('/api/v2/notification-groups', 401), ('/api/v2/devices', 401)]
+    endpoints = [
+        ('/api/v1/sys_version', 200),
+        ('/automation-core/v1/health', 200),
+        ('/api/v2/notification-groups', 401),
+        ('/api/v2/devices', 401),
+        ('/api/v2/device-access-templates', 401),
+    ]
     last_error = ''
     for attempt in range(60):
         try:

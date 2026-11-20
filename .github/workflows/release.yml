@@ -72,6 +72,7 @@ jobs:
               --add-host thingsvis-studio:127.0.0.1 \
               --add-host encore-api:127.0.0.1 \
               --add-host notification-core:127.0.0.1 \
+              -v "$PWD/config/native:/run/config:ro" \
               -v "$PWD/niginx.conf:/etc/nginx/nginx.conf:ro" \
               nginx:alpine nginx -t
           fi

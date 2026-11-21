@@ -40,8 +40,8 @@ jobs:
           TP_AUTOMATION_TOKEN=syntax-check-only
           TP_MQTT_USER=syntax-check-only
           TP_MQTT_PASSWORD=syntax-check-only
-          TP_PROTOCOL_MQTT_USER=syntax-check-only
-          TP_PROTOCOL_MQTT_PASSWORD=syntax-check-only
+          TP_PROTOCOL_MQTT_USER=protocol-syntax-check-only
+          TP_PROTOCOL_MQTT_PASSWORD=protocol-syntax-check-only
           TP_NATIVE_DB_PASSWORD=syntax-check-only
           TP_NOTIFICATION_KEYRING_B64=syntax-check-only
           EOF

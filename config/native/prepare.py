@@ -754,6 +754,8 @@ def verify():
         ('/api/v2/notification-groups', 401),
         ('/api/v2/devices', 401),
         ('/api/v2/device-access-templates', 401),
+        ('/api/v2/device-groups', 401),
+        ('/api/v2/device-group-tree', 401),
     ]
     last_error = ''
     for attempt in range(60):

@@ -27,8 +27,8 @@ def main():
     if target not in ("linux/amd64", "linux/arm64"):
         parser.error("unsupported baseline target")
     ids = [entry["id"] for entry in baseline["plugins"]]
-    if sorted(ids) != ["homeassistant", "http-adapter"]:
-        parser.error("expected a signed HA/HTTP catalog without Modbus")
+    if sorted(ids) not in (["homeassistant", "http-adapter"], ["homeassistant", "http-adapter", "modbus"]):
+        parser.error("expected a signed HA/HTTP catalog with optional Modbus")
     image, = json.loads(args.image_inspect.read_text(encoding="utf-8"))
     if f"{image['Os']}/{image['Architecture']}" != target:
         parser.error("image and baseline architectures differ")
@@ -60,7 +60,7 @@ def main():
             parser.error(f"signed baseline asset digest does not match: {name}")
     for name in retained:
         shutil.copyfile(args.baseline.parent / name, args.output.parent / name)
-    baseline["plugins"].append(modbus)
+    baseline["plugins"] = [entry for entry in baseline["plugins"] if entry["id"] != "modbus"] + [modbus]
     baseline.update(version="1.3.0", release_tag=f"plugin-modbus-v{modbus['version']}", published_at=now)
     args.output.write_text(json.dumps(baseline, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 

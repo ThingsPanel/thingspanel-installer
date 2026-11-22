@@ -1,7 +1,7 @@
 {
   "id": "modbus",
   "display_name": "Modbus",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "kind": "service",
   "description": "Connect Modbus TCP and RTU gateways and their subdevices.",
   "entrypoint": "/app/tp-plugin-modbus",

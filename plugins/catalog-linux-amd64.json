@@ -121,10 +121,10 @@
       "identity": {
         "token_env": "MODBUS_THINGSPANEL_TOKEN"
       },
-      "image_archive_sha256": "3ae41f200082e3a8ea52d7becc8a44bbc630e41f4eb83f1285c1acaeeefe942e",
-      "image_id": "sha256:bd13ff7d201c1f3ba9d8b86ddb8c1ac20e0dc95f646dd1d9e12ae0cffb322b03",
+      "image_archive_sha256": "0f643aa982ce555471d1a8c36d96134531c3c9ab91c80329812863151ff814de",
+      "image_id": "sha256:84d2cafdaf6e9bca98defe72c3aa752b93553cc0c656d3fef84e57e8e1cb985a",
       "image_platform": "linux/amd64",
-      "installer_commit": "929f6e36f73e5a86d23490ab38ed477ae05ac540",
+      "installer_commit": "00375f1cbf76edaef0ffb42d57f1a171d4a038d0",
       "kind": "service",
       "platform": {
         "binding": "none",
@@ -141,12 +141,12 @@
           "service_type": 1
         }
       },
-      "source_commit": "0d2c2c5d8ae4b33e12a329695d2283dff437c20a",
-      "version": "1.0.0"
+      "source_commit": "1d3dfcceb51d42b21466549c891271cd5d76d6aa",
+      "version": "1.0.1"
     }
   ],
-  "published_at": 1795006149,
-  "release_tag": "plugin-modbus-v1.0.0",
+  "published_at": 1795319555,
+  "release_tag": "plugin-modbus-v1.0.1",
   "schema": "thingspanel.plugin-catalog.v1",
   "target_platform": "linux/amd64",
   "version": "1.3.0"

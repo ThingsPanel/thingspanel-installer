@@ -799,6 +799,10 @@ def verify():
                 with socket.create_connection(('127.0.0.1', published[target]), timeout=2):
                     pass
             command('docker', 'compose', 'exec', '-T', 'automation-scheduler', 'test', '-f', '/tmp/last-tick-ok')
+            plugins = sql('notification', "SELECT count(DISTINCT plugin_id) FROM notification_plugin_registrations "
+                          "WHERE plugin_id IN ('thingspanel.smtp', 'thingspanel.unipush')")
+            if plugins != '2':
+                raise RuntimeError('Default notification plugins are not registered yet')
             print('Web API, native API, notification auth and scheduler are ready.')
             return
         except (RuntimeError, ValueError, OSError) as error:

@@ -396,6 +396,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      notification-smtp:
+        condition: service_started
+      notification-unipush:
+        condition: service_started
   automation-scheduler:
     image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.4.0.1
     entrypoint:

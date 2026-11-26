@@ -66,6 +66,13 @@ var
 begin
   Result := True;
 
+  if Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -Command "docker version --format ''{{.Server.Version}}'' 2>$null; exit $LASTEXITCODE"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    if ResultCode = 0 then Exit;
+  end;
+
   if not FileExists(ExpandConstant('{pf}\Docker\Docker\Docker Desktop.exe')) and
      not FileExists(ExpandConstant('{pf64}\Docker\Docker\Docker Desktop.exe')) then
   begin

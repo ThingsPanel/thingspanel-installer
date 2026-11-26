@@ -366,6 +366,9 @@ def configure():
         json.dumps({'main': base64.b64encode(secrets.token_bytes(32)).decode()}).encode()).decode()
     if os.name == 'nt' and not (ROOT / '.tp-agent/state/state.json').exists():
         defaults['TP_AGENT_RUN_MOUNT'] = 'agent_run'
+    for plugin in ('SMTP', 'UNIPUSH'):
+        key = 'TP_NOTIFICATION_' + plugin + '_ADAPTER_TOKEN'
+        defaults[key] = deployment_secret(current, key)
     defaults['METADATA_CREDENTIAL_ACTIVE_KEY_REF'] = 'main'
     for identifier, prefix, _ in MANAGED_PROTOCOLS.values():
         defaults[prefix + '_USER'] = 'tp-community-' + identifier.lower()
@@ -437,6 +440,17 @@ def configure():
         (CONFIG / 'internal.key').chmod(0o600)
     system_ca = Path('/etc/ssl/certs/ca-certificates.crt')
     bundle = (system_ca.read_bytes() if system_ca.exists() else b'') + b'\n' + certificate.read_bytes()
+    for name in ('notification-smtp', 'notification-unipush'):
+        identity = CONFIG / (name + '.pem')
+        if not identity.exists():
+            with tempfile.TemporaryDirectory(prefix='tp-notification-tls-') as temp:
+                key, cert = Path(temp) / 'key.pem', Path(temp) / 'cert.pem'
+                command('openssl', 'req', '-x509', '-nodes', '-newkey', 'rsa:2048', '-days', '3650',
+                        '-subj', '/CN=' + name, '-addext', 'subjectAltName=DNS:' + name,
+                        '-keyout', str(key), '-out', str(cert))
+                files.durable_bytes(identity, cert.read_bytes() + key.read_bytes(), 0o600)
+        public = command('openssl', 'x509', '-in', str(identity), '-outform', 'PEM')
+        bundle += b'\n' + public.encode('ascii') + b'\n'
     (CONFIG / 'internal-ca.pem').write_bytes(bundle)
     return current
 

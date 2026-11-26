@@ -165,7 +165,7 @@ services:
     volumes:
     - go_files:/go/src/app/files
     - go_configs:/go/src/app/configs
-    - ./.tp-agent/run:/run/tp-agent:ro
+    - ${TP_AGENT_RUN_MOUNT:-./.tp-agent/run}:/run/tp-agent:ro
     - ./config/native/broker/plugin-token:/run/tp-broker/plugin-token:ro
     - ./config/native/broker/owner.crt:/run/tp-broker/trust/owner.crt:ro
     restart: unless-stopped
@@ -372,6 +372,7 @@ services:
       retries: 24
       start_period: 30s
 volumes:
+  agent_run: null
   go_files: null
   go_configs: null
   postgres_data: null

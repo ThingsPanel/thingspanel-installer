@@ -15,6 +15,7 @@ import argparse
 import os
 from pathlib import Path
 import secrets
+import json
 import subprocess
 import sys
 import time
@@ -33,7 +34,7 @@ def sh(args, check=True):
 
 
 def project_of(stack_dir):
-    return os.environ.get('COMPOSE_PROJECT_NAME') or Path(stack_dir).resolve().name.lower()
+    return json.loads(sh(['docker', 'compose', '--project-directory', str(stack_dir), 'config', '--format', 'json']).stdout)['name']
 
 
 def container_name(stack_dir):
@@ -66,20 +67,36 @@ def up(args):
     name = container_name(stack)
     private_dir(agent_dir)
     run, state = agent_dir / 'run', agent_dir / 'state'
-    private_dir(run)
-    private_dir(state)
-    token = run / 'token'
-    if not token.exists():
-        token.write_text(secrets.token_hex(24))
-    os.chmod(token, 0o600)
+    native_volumes = os.name == 'nt' and not (state / 'state.json').exists()
+    run_mount, state_mount = run, state
+    if native_volumes:
+        run_mount, state_mount = project + '_agent_run', project + '_agent_state'
+        # Generate the control token inside Linux so neither the token nor the
+        # Agent journal inherits NTFS bind mount permissions.
+        init = ('set -eu; umask 077; chmod 700 /ctl /state; '
+                'if [ ! -s /ctl/token ]; then head -c 32 /dev/urandom | od -v -An -tx1 | tr -d " \\n" > /ctl/token.tmp; '
+                'test "$(wc -c < /ctl/token.tmp)" -eq 64; mv /ctl/token.tmp /ctl/token; fi; '
+                'chmod 600 /ctl/token; '
+                'if [ ! -f /state/state.json ]; then /tp-agent -state /state/state.json -init "$1"; fi')
+        sh(['docker', 'run', '--rm', '--network', 'none', '-u', '0', '--entrypoint', '/bin/sh',
+            '-v', str(Path(args.agent_bin).resolve()) + ':/tp-agent:ro',
+            '-v', run_mount + ':/ctl', '-v', state_mount + ':/state', args.agent_image,
+            '-c', init, 'tp-init', 'host-' + name])
+    else:
+        private_dir(run)
+        private_dir(state)
+        token = run / 'token'
+        if not token.exists():
+            token.write_text(secrets.token_hex(24))
+        os.chmod(token, 0o600)
     catalog, trust_root = Path(args.catalog).resolve(), Path(args.trust_root).resolve()
     if not (catalog.is_file() and Path(str(catalog) + '.sig').is_file() and trust_root.is_file()):
         raise RuntimeError('catalog, catalog signature and trust root must exist')
     network = args.network or '%s_thingspanel_network' % project
-    mounts = ['-v', '%s:/tp-agent:ro' % Path(args.agent_bin).resolve(), '-v', '%s:/run/agent-ctl' % run, '-v', '%s:/run/agent/state' % state,
+    mounts = ['-v', '%s:/tp-agent:ro' % Path(args.agent_bin).resolve(), '-v', '%s:/run/agent-ctl' % run_mount, '-v', '%s:/run/agent/state' % state_mount,
               '-v', '%s:/run/agent/catalog:ro' % catalog.parent, '-v', '%s:/run/agent/trust-root.pem:ro' % trust_root,
               '-v', '%s:/run/agent/stack.env:ro' % (stack / '.env')]
-    if not (state / 'state.json').exists():
+    if not native_volumes and not (state / 'state.json').exists():
         sh(['docker', 'run', '--rm', '--entrypoint', '/tp-agent', '-u', '0', '-v', '%s:/tp-agent:ro' % Path(args.agent_bin).resolve(),
             '-v', '%s:/run/agent/state' % state, args.agent_image, '-state', '/run/agent/state/state.json', '-init', 'host-' + name])
     sh(['docker', 'rm', '-f', name], check=False)
@@ -89,12 +106,12 @@ def up(args):
         '-catalog', '/run/agent/catalog/' + catalog.name, '-trust-root', '/run/agent/trust-root.pem',
         '-stack-env', '/run/agent/stack.env', '-network', network, '-docker-socket', '/var/run/docker.sock', '-sweep-interval', '5s'])
     for _ in range(20):
-        if (run / 'agent.sock').exists():
+        if sh(['docker', 'exec', name, 'test', '-S', '/run/agent-ctl/agent.sock'], check=False).returncode == 0:
             break
         time.sleep(0.5)
     else:
         raise RuntimeError('the Agent did not create its socket; see: docker logs ' + name)
-    print('Agent %s is up; the platform backend mounts %s as /run/tp-agent' % (name, run))
+    print('Agent %s is up; the platform backend mounts %s as /run/tp-agent' % (name, run_mount))
     # Installer activation owns the update lock while starting this process;
     # direct/manual starts retain the existing wait behavior.
     ensure_scope_watcher(stack, agent_dir, deferred=args.defer_scope_watcher)

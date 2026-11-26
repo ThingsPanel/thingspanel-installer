@@ -364,6 +364,8 @@ def configure():
                 'TP_NOTIFICATION_KEYRING_B64': base64.b64encode(json.dumps({'main': base64.b64encode(secrets.token_bytes(32)).decode()}).encode()).decode()}
     defaults['METADATA_CREDENTIAL_KEYRING_B64'] = base64.b64encode(
         json.dumps({'main': base64.b64encode(secrets.token_bytes(32)).decode()}).encode()).decode()
+    if os.name == 'nt' and not (ROOT / '.tp-agent/state/state.json').exists():
+        defaults['TP_AGENT_RUN_MOUNT'] = 'agent_run'
     defaults['METADATA_CREDENTIAL_ACTIVE_KEY_REF'] = 'main'
     for identifier, prefix, _ in MANAGED_PROTOCOLS.values():
         defaults[prefix + '_USER'] = 'tp-community-' + identifier.lower()

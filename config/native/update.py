@@ -53,6 +53,12 @@ PLUGIN_HELPER_PROFILES = ({
     'tools/plugin_bundle.py': 'd699d622d128259df560a5a18e9d1710621ad4bddec3d0158e51e0f8d5e29733',
     'tools/plugin_catalog.py': '136ae3a7dd18d0544317fdcd1388015f82e30bb5894222e1daaf09bf75a33987',
     'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',
+    'tools/agent_host.py': '5612836119c4a1a0f03fb1142d61ecf43a6742df83186e4ebb50bf86557c766d',
+    'tools/scope_sync.py': 'f995ff0d2fdc23225aadceb9be78709493fd1a5f8f6094173086d63e8cf5e4c1',
+}, {
+    'tools/plugin_bundle.py': 'd699d622d128259df560a5a18e9d1710621ad4bddec3d0158e51e0f8d5e29733',
+    'tools/plugin_catalog.py': '136ae3a7dd18d0544317fdcd1388015f82e30bb5894222e1daaf09bf75a33987',
+    'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',
     'tools/agent_host.py': '037dd423bab55cf48b56b27eca736e28eb1e05a6cd75e4a425586b3ac56705f9',
     'tools/scope_sync.py': 'f995ff0d2fdc23225aadceb9be78709493fd1a5f8f6094173086d63e8cf5e4c1',
 }, {
@@ -1033,7 +1039,13 @@ def prepare_optional_plugin(root, supplied_trust_root=None, *, allow_download=Fa
         candidate_ids = {entry['id'] for entry in candidate['plugins']}
         same_release = (current is None and candidate['release_tag'] == previous['release_tag']
                         and candidate['published_at'] == previous['published_at'])
-        return (same_release or candidate['published_at'] > previous['published_at']) and previous_ids <= candidate_ids
+        refresh_helpers = (allow_download and current is not None and candidate == previous
+                           and not current_helpers(active))
+        return (refresh_helpers or same_release or candidate['published_at'] > previous['published_at']) and previous_ids <= candidate_ids
+
+    def current_helpers(bundle):
+        return all(file_info(bundle / path)['sha256'] == digest
+                   for path, digest in PLUGIN_HELPER_PROFILES[0].items())
 
     if pending is not None:
         helpers = load_plugin_helpers(pending)
@@ -1045,7 +1057,7 @@ def prepare_optional_plugin(root, supplied_trust_root=None, *, allow_download=Fa
             if not allow_download:
                 return current
         else:
-            if accept_catalog(catalog):
+            if accept_catalog(catalog) and (not allow_download or current_helpers(pending)):
                 return pending, trust, catalog, True
         clear_pending_plugin(root)
     if not allow_download:

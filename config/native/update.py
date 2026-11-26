@@ -631,6 +631,9 @@ class Transaction:
             self.check_unchanged(data)
             if not same(file_info(target), entry['old']):
                 raise UpdateError('Managed file changed before replacement: ' + relative)
+            # Windows cannot replace an unchanged file while Docker bind-mounts it.
+            if same(entry['old'], entry['new']):
+                continue
             missing = []
             parent = target.parent
             while parent != self.root and not parent.exists():

@@ -584,6 +584,10 @@ def sync_scope(env, restart=None):
     # Serialize the full compare/write/restart/ack sequence with installer
     # activation and other scope workers. The watcher retries a busy lock.
     with files.update_lock(state):
+        if (state / 'journal.json').exists():
+            record = files.Transaction(ROOT).load()
+            if not record or record['phase'] not in ('complete', 'recovered'):
+                raise RuntimeError('Scope refresh requires a completed installer operation')
         targets, plugins, managed = query_scopes()
         wanted = scope_services(env, targets, plugins, managed)
         current = current_services()
@@ -800,11 +804,20 @@ if __name__ == '__main__':
     # A fresh install has no generated secrets yet, so required Compose
     # interpolation cannot run until configure() has created the .env file.
     check_thingsvis_database(uninterpolated=True)
+    if args.sync_scope:
+        if any((args.pull, args.bootstrap, args.refresh_devices, args.verify)):
+            parser.error('--sync-scope must run independently')
+        # Scope reconciliation consumes existing credentials. TLS and other
+        # installer-owned configuration must only be written during activation.
+        env_text = (ROOT / '.env').read_text(encoding='utf-8')
+        env = dict(line.split('=', 1) for line in env_text.splitlines()
+                   if '=' in line and not line.startswith('#'))
+        sync_scope(env)
+        raise SystemExit(0)
     env = configure()
     check_thingsvis_database()
     if args.pull: pull_images(env)
     if args.bootstrap: bootstrap()
     if args.refresh_devices: refresh(env)
-    if args.sync_scope: sync_scope(env)
     if args.verify: verify()
     print('Native service configuration prepared. Credentials remain in local .env and config/native/.')

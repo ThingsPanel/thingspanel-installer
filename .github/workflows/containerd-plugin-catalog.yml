@@ -1,0 +1,43 @@
+name: Sign containerd plugin catalogs
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  sign:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Derive IDs from the release archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -eu
+          mkdir -p archives out
+          catalog="plugins/catalog-linux-$ARCH.json"
+          python3 -c "import sys; sys.path.insert(0, 'config/native'); import update; sys.stdout.buffer.write(update.PLUGIN_TRUST_PEM)" > "$RUNNER_TEMP/root.pem"
+          python3 tools/plugin_catalog.py verify --trust-root "$RUNNER_TEMP/root.pem" --catalog "$catalog"
+          tag="$(jq -r .release_tag "$catalog")"
+          gh release download "$tag" --pattern "*-image-linux-$ARCH.tar" --dir archives
+          python3 tools/build_containerd_catalog.py --catalog "$catalog" --trust-root "$RUNNER_TEMP/root.pem" --archives archives --output "out/catalog-linux-$ARCH-containerd.json"
+      - name: Sign and verify
+        env:
+          ARCH: ${{ matrix.arch }}
+          SIGNING_KEY: ${{ secrets.TP_PLUGIN_CATALOG_SIGNING_KEY }}
+        run: |
+          set -eu
+          umask 077
+          key="$(mktemp)"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          catalog="out/catalog-linux-$ARCH-containerd.json"
+          openssl dgst -sha256 -sign "$key" -out "$catalog.sig" "$catalog"
+          python3 tools/plugin_catalog.py verify --trust-root "$RUNNER_TEMP/root.pem" --catalog "$catalog"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-containerd-${{ matrix.arch }}
+          path: out/*

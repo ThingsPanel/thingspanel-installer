@@ -41,7 +41,6 @@ english.InstallingServices=Starting ThingsPanel services. The first start may ta
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\..\docker-compose.yml"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\install.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\install.core.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\upgrade.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -54,7 +53,7 @@ Name: "{group}\Open Web UI"; Filename: "http://localhost:8080"
 Name: "{commondesktop}\ThingsPanel"; Filename: "{app}\ThingsPanel.bat"; Tasks: desktopicon
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\install.core.ps1"" -Version ""{#AppVersion}"""; WorkingDir: "{app}"; StatusMsg: "{cm:InstallingServices}"; Flags: waituntilterminated
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\install.core.ps1"" -Version ""{#AppVersion}"" -InstallDir ""{app}"""; WorkingDir: "{app}"; StatusMsg: "{cm:InstallingServices}"; Flags: waituntilterminated
 Filename: "http://localhost:8080"; Description: "Open ThingsPanel Web UI"; Flags: shellexec postinstall skipifsilent
 
 [UninstallRun]

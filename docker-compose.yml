@@ -1,6 +1,6 @@
 services:
   frontend:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-vue:v1.4.0
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-vue:v1.4.0.1
     ports:
     - ${HTTP_PORT:-8080}:8080
     - ${TP_PORT_HTTP_ADAPTER:-19090}:19090
@@ -97,7 +97,7 @@ services:
     networks:
     - thingspanel_network
   backend:
-    image: ${TP_BACKEND_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.4.0}
+    image: ${TP_BACKEND_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.4.0.1}
     ports:
     - ${TP_PORT_BACKEND:-9999}:9999
     environment:
@@ -284,7 +284,7 @@ services:
     - ./config/native/broker/owner.crt:/run/tp-broker/trust/owner.crt:ro
     - ./config/native/broker:/run/secrets:ro
   encore-api:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-encore:v1.4.0
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-encore:v1.4.0.1
     restart: unless-stopped
     networks:
     - thingspanel_network
@@ -315,7 +315,7 @@ services:
       postgres:
         condition: service_healthy
   notification-smtp:
-    image: ${TP_BACKEND_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.4.0}
+    image: ${TP_BACKEND_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.4.0.1}
     entrypoint: ["/usr/local/bin/notification-smtp"]
     restart: unless-stopped
     read_only: true
@@ -333,7 +333,7 @@ services:
     volumes:
     - ./config/native/notification-smtp.pem:/run/identity.pem:ro
   notification-unipush:
-    image: ${TP_BACKEND_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.4.0}
+    image: ${TP_BACKEND_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.4.0.1}
     entrypoint: ["/usr/local/bin/notification-unipush"]
     restart: unless-stopped
     read_only: true
@@ -357,7 +357,7 @@ services:
     - ./config/native/notification-unipush.pem:/run/identity.pem:ro
     - ./config/native/internal-ca.pem:/run/internal-ca.pem:ro
   notification-core:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-encore:v1.4.0
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-encore:v1.4.0.1
     restart: unless-stopped
     networks:
     - thingspanel_network
@@ -397,7 +397,7 @@ services:
       postgres:
         condition: service_healthy
   automation-scheduler:
-    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.4.0
+    image: registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.4.0.1
     entrypoint:
     - /bin/sh
     - /run/config/tick.sh

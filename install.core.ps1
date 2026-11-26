@@ -3,7 +3,8 @@
 param(
     [string]$Version   = "",
     [int]$HttpPort      = 8080,
-    [int]$MqttPort      = 1883
+    [int]$MqttPort      = 1883,
+    [string]$InstallDir = "C:\ThingsPanel"
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,7 +25,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
 $REPO          = "ThingsPanel/thingspanel-installer"
 $RAW_BASE      = "https://install.thingspanel.io"
-$INSTALL_DIR   = "C:\ThingsPanel"
+$INSTALL_DIR   = [IO.Path]::GetFullPath($InstallDir)
 $MIN_DOCKER_VER = "20.10"
 $UPDATE_ENGINE_SHA256 = "9c15238da66b74b37beac0b35694ca336b1b9b522626e26efa22f1d418e619f3"
 

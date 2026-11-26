@@ -149,7 +149,8 @@ def file_info(path):
         return None
     if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode):
         raise UpdateError('A managed file is not a regular file: ' + path.name)
-    fd = os.open(str(path), os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0)
+    fd = os.open(str(path), flags)
     try:
         opened = os.fstat(fd)
         if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):

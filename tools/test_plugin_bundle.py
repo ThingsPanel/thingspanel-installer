@@ -27,6 +27,12 @@ class PluginBundleTests(unittest.TestCase):
         self.trust.touch()
         self.downloads = []
 
+    def test_file_info_hashes_all_binary_archive_bytes(self):
+        archive = self.stage / 'plugin-image.tar'
+        payload = b'header\r\nlayer\x1atrailer'
+        archive.write_bytes(payload)
+        self.assertEqual(update.file_info(archive)['sha256'], hashlib.sha256(payload).hexdigest())
+
     def catalog(self, arch, plugins):
         target = 'linux/' + arch
         entries = [{

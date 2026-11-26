@@ -18,7 +18,7 @@ $REPO          = "ThingsPanel/thingspanel-installer"
 $RAW_BASE      = "https://install.thingspanel.io"
 $INSTALL_DIR   = "C:\ThingsPanel"
 $MIN_DOCKER_VER = "20.10"
-$UPDATE_ENGINE_SHA256 = "5b234f655dd0728b321ab7e24115952ff1a08ca2e6ae05f6202e10a4e679db80"
+$UPDATE_ENGINE_SHA256 = "8160c4399029944cfba87c1aaf4f1eb62b0a89c9262a75921c9453d44552fbeb"
 
 function Write-Info    ($m) { Write-Host "[INFO]  $m" -ForegroundColor Cyan }
 function Write-Success ($m) { Write-Host "[OK]    $m" -ForegroundColor Green }

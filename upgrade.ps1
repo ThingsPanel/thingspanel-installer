@@ -24,10 +24,18 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$env:PYTHONUTF8 = '1'
+if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
+    $git = Get-Command git.exe -ErrorAction SilentlyContinue
+    if ($git) {
+        $gitTools = Join-Path (Split-Path (Split-Path $git.Source)) 'usr\bin'
+        if (Test-Path (Join-Path $gitTools 'openssl.exe')) { $env:Path += ";$gitTools" }
+    }
+}
 
 $REPO     = "ThingsPanel/thingspanel-installer"
 $RAW_BASE = "https://install.thingspanel.io"
-$UPDATE_ENGINE_SHA256 = "8160c4399029944cfba87c1aaf4f1eb62b0a89c9262a75921c9453d44552fbeb"
+$UPDATE_ENGINE_SHA256 = "85b415fd3961f5ff51d30aa65938be3bad3c66b391973cd2f175fb7bdcdeea7d"
 
 function Write-Info    ($m) { Write-Host "[INFO]  $m" -ForegroundColor Cyan }
 function Write-Success ($m) { Write-Host "[OK]    $m" -ForegroundColor Green }

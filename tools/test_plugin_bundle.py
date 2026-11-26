@@ -48,10 +48,12 @@ class PluginBundleTests(unittest.TestCase):
             'plugins': entries,
         }
 
-    def download_bundle(self, arch, catalog, *, corrupt=None, accept_catalog=None):
+    def download_bundle(self, arch, catalog, *, corrupt=None, accept_catalog=None, containerd=False):
+        suffix = '-containerd' if containerd else ''
+        name = f'catalog-linux-{arch}{suffix}.json'
         assets = {
-            'catalog-linux-%s.json' % arch: b'catalog',
-            'catalog-linux-%s.json.sig' % arch: b'signature',
+            name: b'catalog',
+            name + '.sig': b'signature',
             'tp-agent-linux-%s' % arch: b'agent',
             'ha-image-linux-%s.tar' % arch: b'homeassistant',
             'http-image-linux-%s.tar' % arch: b'http-adapter',
@@ -67,7 +69,17 @@ class PluginBundleTests(unittest.TestCase):
 
         return plugin_bundle.stage_plugin_bundle(
             'linux/' + arch, trust_root=self.trust, stage_parent=self.stage, downloader=download,
-            catalog_loader=lambda *_: catalog, accept_catalog=accept_catalog)
+            catalog_loader=lambda *_: catalog, accept_catalog=accept_catalog, containerd=containerd)
+
+    def test_containerd_requires_its_own_signed_catalog(self):
+        catalog = self.catalog('amd64', ('modbus',))
+        with self.assertRaisesRegex(plugin_bundle.PluginBundleError, 'image store'):
+            self.download_bundle('amd64', catalog, containerd=True)
+        self.assertEqual(self.downloads, ['catalog-linux-amd64-containerd.json',
+                                          'catalog-linux-amd64-containerd.json.sig'])
+        catalog['image_store'] = 'containerd'
+        bundle = self.download_bundle('amd64', catalog, containerd=True)
+        self.assertEqual(bundle.catalog, catalog)
 
     def test_all_signed_images_are_arranged_for_each_architecture(self):
         plugins = ('homeassistant', 'http-adapter', 'modbus')

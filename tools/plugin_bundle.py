@@ -192,7 +192,7 @@ def _release_image_name(plugin_id, arch):
 def stage_plugin_bundle(target_platform, *, trust_root, stage_parent,
                         pages_base_url=DEFAULT_PAGES_BASE_URL,
                         release_base_url=DEFAULT_RELEASE_BASE_URL,
-                        downloader=None, catalog_loader=None, accept_catalog=None,
+                        downloader=None, catalog_loader=None, accept_catalog=None, containerd=False,
                         max_agent_bytes=MAX_AGENT_BYTES,
                         max_image_archive_bytes=MAX_IMAGE_ARCHIVE_BYTES):
     """Verify and download a per-platform bundle into a new private stage.
@@ -225,17 +225,20 @@ def stage_plugin_bundle(target_platform, *, trust_root, stage_parent,
     stage = Path(tempfile.mkdtemp(prefix='tp-plugin-bundle-', dir=str(parent)))
     os.chmod(stage, 0o700)
     try:
-        catalog_path = stage / ('catalog-linux-%s.json' % arch)
+        suffix = '-containerd' if containerd else ''
+        catalog_path = stage / ('catalog-linux-%s%s.json' % (arch, suffix))
         signature_path = Path(str(catalog_path) + '.sig')
-        _download(fetcher, pages_base_url + '/plugins/catalog-linux-%s.json' % arch,
+        _download(fetcher, pages_base_url + '/plugins/' + catalog_path.name,
                   catalog_path, MAX_CATALOG_BYTES)
-        _download(fetcher, pages_base_url + '/plugins/catalog-linux-%s.json.sig' % arch,
+        _download(fetcher, pages_base_url + '/plugins/' + signature_path.name,
                   signature_path, MAX_SIGNATURE_BYTES)
         try:
             catalog = loader(catalog_path, trust_root)
         except Exception as error:  # noqa: BLE001 - verifier errors must remain fail-closed.
             raise PluginBundleError('plugin catalog signature or schema is invalid') from error
         entries = _validate_catalog(catalog, target_platform)
+        if catalog.get('image_store', 'classic') != ('containerd' if containerd else 'classic'):
+            raise PluginBundleError('Signed catalog does not match the Docker image store')
         if accept_catalog is not None and not accept_catalog(catalog):
             shutil.rmtree(stage)
             return None

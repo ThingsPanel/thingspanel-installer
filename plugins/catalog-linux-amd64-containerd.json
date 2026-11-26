@@ -1,0 +1,154 @@
+{
+  "agent_sha256": "fbae4ca150617ea761ed27ce487be62264a01f14ccbff4b64b189ed2604200ca",
+  "expires_at": 2109866166,
+  "image_store": "containerd",
+  "plugins": [
+    {
+      "args": [],
+      "description": "Home Assistant device connector: HA state_changed events become ThingsPanel telemetry, platform commands call HA services.",
+      "entrypoint": "/usr/local/bin/homeassistant-service",
+      "env": [
+        "CONNECTOR_SERVICE_IDENTIFIER=homeassistant",
+        "CONNECTOR_INSTANCE_ID=homeassistant-1",
+        "THINGSPANEL_BACKEND_URL=http://backend:9999",
+        "TP_MQTT_BROKER=tcp://mosquitto:1883",
+        "LOG_LEVEL=info"
+      ],
+      "env_from_stack": {
+        "TP_MQTT_PASS": "TP_PROTOCOL_MQTT_PASSWORD",
+        "TP_MQTT_USER": "TP_PROTOCOL_MQTT_USER"
+      },
+      "health": {
+        "path": "/health",
+        "port": 9001
+      },
+      "id": "homeassistant",
+      "identity": {
+        "token_env": "TP_PLUGIN_RUNTIME_TOKEN"
+      },
+      "image_archive_sha256": "8fd426bc22c249f0f32a1eca00b17c0a2925f0ce7e24593b8b15e96b48a2776f",
+      "image_id": "sha256:7a7a0aedf108809e4f288303c96d4c495a357e72cbd7f0a20d291d31e2e0c4bc",
+      "image_platform": "linux/amd64",
+      "installer_commit": "1f2f5a96cf5617b468460634e0616d25e8fecafc",
+      "kind": "service",
+      "platform": {
+        "binding": "none",
+        "http_port": 9001,
+        "service_identifier": "homeassistant",
+        "service_plugin": {
+          "config": {
+            "http_address": "{alias}:{http_port}",
+            "sub_topic_prefix": "plugin/homeassistant/"
+          },
+          "description": "Home Assistant device connector (installed by the plugin installer)",
+          "name": "Home Assistant",
+          "service_type": 2
+        }
+      },
+      "sdk_commit": "fa39f24ea7bdcbe781029ec515713e7804250134",
+      "source_commit": "0b3240e060def50e124495f478a79ea9d1809ab0",
+      "version": "1.0.0"
+    },
+    {
+      "args": [
+        "-c",
+        "/app/config/config.yaml"
+      ],
+      "description": "HTTP device uplink, direct downlink and long polling; devices are created from HTTP templates in ThingsPanel.",
+      "entrypoint": "/app/tp-plugin-http",
+      "env": [
+        "P_PLATFORM_MANAGED=true",
+        "P_PLATFORM_SERVICE_IDENTIFIER=HTTP",
+        "P_PLATFORM_URL=http://backend:9999",
+        "P_PLATFORM_MQTT_BROKER=tcp://mosquitto:1883",
+        "P_SERVER_AUTO_REGISTER=false",
+        "P_LOG_ENABLEFILE=false",
+        "P_LOG_DEVICE_LOG_ENABLED=false"
+      ],
+      "env_from_stack": {
+        "P_PLATFORM_MQTT_PASSWORD": "TP_HTTP_MQTT_PASSWORD",
+        "P_PLATFORM_MQTT_USERNAME": "TP_HTTP_MQTT_USER"
+      },
+      "health": {
+        "path": "/health",
+        "port": 19091
+      },
+      "id": "http-adapter",
+      "identity": {
+        "token_env": "P_PLATFORM_API_TOKEN"
+      },
+      "image_archive_sha256": "04bef59a36c94c6e4d70fb27c1c977921cb195080bd93e4f3730d57719d1708b",
+      "image_id": "sha256:a74ef2c129e260d6572637774c28ce2b5febd0f01414e7ff71eab51fba9c6d4f",
+      "image_platform": "linux/amd64",
+      "installer_commit": "bd639a0c7484ea70bfd3a90a2b5cbb6a7d125229",
+      "kind": "service",
+      "platform": {
+        "binding": "none",
+        "http_port": 19091,
+        "network_alias": "tp-plugin-http-adapter",
+        "service_identifier": "HTTP",
+        "service_plugin": {
+          "config": {
+            "http_address": "{alias}:{http_port}",
+            "sub_topic_prefix": "plugin/HTTP/"
+          },
+          "description": "Managed HTTP protocol plugin",
+          "name": "HTTP",
+          "service_type": 1
+        }
+      },
+      "source_commit": "247579be25b7125dd2f9a5c7b4f975e56ccdb695",
+      "version": "1.2.1"
+    },
+    {
+      "description": "Connect Modbus TCP and RTU gateways and their subdevices.",
+      "display_name": "Modbus",
+      "entrypoint": "/app/tp-plugin-modbus",
+      "env": [
+        "MODBUS_CONFIG_FILE=/app/config.yaml",
+        "MODBUS_THINGSPANEL_MANAGED=true",
+        "MODBUS_THINGSPANEL_ADDRESS=http://backend:9999",
+        "MODBUS_MQTT_BROKER=tcp://mosquitto:1883"
+      ],
+      "env_from_stack": {
+        "MODBUS_MQTT_PASSWORD": "TP_MODBUS_MQTT_PASSWORD",
+        "MODBUS_MQTT_USERNAME": "TP_MODBUS_MQTT_USER"
+      },
+      "health": {
+        "path": "/health",
+        "port": 1503
+      },
+      "id": "modbus",
+      "identity": {
+        "token_env": "MODBUS_THINGSPANEL_TOKEN"
+      },
+      "image_archive_sha256": "0f643aa982ce555471d1a8c36d96134531c3c9ab91c80329812863151ff814de",
+      "image_id": "sha256:47cad9a474a29245faaa29b0bd32999acfd88c9139cb3552f487f707956cf186",
+      "image_platform": "linux/amd64",
+      "installer_commit": "00375f1cbf76edaef0ffb42d57f1a171d4a038d0",
+      "kind": "service",
+      "platform": {
+        "binding": "none",
+        "http_port": 1503,
+        "network_alias": "tp-plugin-modbus",
+        "service_identifier": "MODBUS",
+        "service_plugin": {
+          "config": {
+            "http_address": "{alias}:{http_port}",
+            "sub_topic_prefix": "plugin/modbus/"
+          },
+          "description": "Managed Modbus TCP and RTU protocol plugin",
+          "name": "Modbus",
+          "service_type": 1
+        }
+      },
+      "source_commit": "1d3dfcceb51d42b21466549c891271cd5d76d6aa",
+      "version": "1.0.1"
+    }
+  ],
+  "published_at": 1795319555,
+  "release_tag": "plugin-modbus-v1.0.1",
+  "schema": "thingspanel.plugin-catalog.v1",
+  "target_platform": "linux/amd64",
+  "version": "1.3.0"
+}

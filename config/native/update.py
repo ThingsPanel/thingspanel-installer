@@ -50,6 +50,12 @@ HwERLCSb0Ng2n3l4djp5nlaxGQdYZFcwGZJ0UhdPyohfgnwpGnu6eZKicw==
 # profiles here when changing helper code so an offline last-good bundle can
 # still be restored by a later updater.
 PLUGIN_HELPER_PROFILES = ({
+    'tools/plugin_bundle.py': 'd699d622d128259df560a5a18e9d1710621ad4bddec3d0158e51e0f8d5e29733',
+    'tools/plugin_catalog.py': '136ae3a7dd18d0544317fdcd1388015f82e30bb5894222e1daaf09bf75a33987',
+    'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',
+    'tools/agent_host.py': '037dd423bab55cf48b56b27eca736e28eb1e05a6cd75e4a425586b3ac56705f9',
+    'tools/scope_sync.py': 'f995ff0d2fdc23225aadceb9be78709493fd1a5f8f6094173086d63e8cf5e4c1',
+}, {
     'tools/plugin_bundle.py': '849ee6eb31c6ad377cb56370ca5bfdf8d4b1af0e0bb1993b8df03127cc624788',
     'tools/plugin_catalog.py': '136ae3a7dd18d0544317fdcd1388015f82e30bb5894222e1daaf09bf75a33987',
     'config/native/release_manifest.py': '717abbe4a5a52e949042913d5aec5ea349ce41ce1afab814965eecae717b9374',
@@ -884,7 +890,12 @@ def plugin_trust_root(root, supplied=None):
         except ValueError:
             return key
         raise UpdateError('Plugin trust root must be outside the installer payload')
-    key = root.parent / ('.' + root.name + '-plugin-trust.pem')
+    if os.name == 'nt':
+        directory = Path(os.environ['LOCALAPPDATA']) / 'ThingsPanelInstaller'
+        directory.mkdir(parents=True, exist_ok=True)
+        key = directory / 'plugin-trust.pem'
+    else:
+        key = root.parent / ('.' + root.name + '-plugin-trust.pem')
     try:
         fd = os.open(str(key), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o644)
     except FileExistsError:
@@ -995,22 +1006,31 @@ def prepare_optional_plugin(root, supplied_trust_root=None, *, allow_download=Fa
         return None
     trust = plugin_trust_root(root, supplied_trust_root)
     platform = normalize_platform(run_command(['docker', 'info', '--format', '{{.OSType}}/{{.Architecture}}'], root).decode().strip())
+    drivers = json.loads(run_command(['docker', 'info', '--format', '{{json .DriverStatus}}'], root))
+    containerd = ['driver-type', 'io.containerd.snapshotter.v1'] in (drivers or [])
+    store = 'containerd' if containerd else 'classic'
+    previous = None
     current = None
     if active is not None:
         helpers = load_plugin_helpers(active)
         catalog = helpers.verify_active_bundle(active, trust, platform)
-        current = active, trust, catalog, False
+        previous = catalog
+        if catalog.get('image_store', 'classic') == store:
+            current = active, trust, catalog, False
         if pending == active:
             clear_pending_plugin(root)
             pending = None
 
     def accept_catalog(candidate):
-        if current is None:
+        if candidate.get('image_store', 'classic') != store:
+            return False
+        if previous is None:
             return True
-        previous = current[2]
         previous_ids = {entry['id'] for entry in previous['plugins']}
         candidate_ids = {entry['id'] for entry in candidate['plugins']}
-        return candidate['published_at'] > previous['published_at'] and previous_ids <= candidate_ids
+        same_release = (current is None and candidate['release_tag'] == previous['release_tag']
+                        and candidate['published_at'] == previous['published_at'])
+        return (same_release or candidate['published_at'] > previous['published_at']) and previous_ids <= candidate_ids
 
     if pending is not None:
         helpers = load_plugin_helpers(pending)
@@ -1038,7 +1058,7 @@ def prepare_optional_plugin(root, supplied_trust_root=None, *, allow_download=Fa
                 raise UpdateError('Downloaded plugin helper does not match the installer pin: ' + relative)
         helpers = load_plugin_helpers(helper_root)
         staged = helpers.stage_plugin_bundle(platform, trust_root=trust, stage_parent=parent,
-                                             accept_catalog=accept_catalog)
+                                             accept_catalog=accept_catalog, containerd=containerd)
         if staged is None:
             return current
         bundle = helpers.arrange_staged_bundle(staged)

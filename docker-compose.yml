@@ -323,6 +323,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     networks: [thingspanel_network]
     environment:
+      NOTIFICATION_SETTINGS_FILE: /var/lib/notification/provider.json
       NOTIFICATION_PLUGIN_LISTEN: ":5443"
       NOTIFICATION_ALLOW_UNCONFIGURED: "true"
       NOTIFICATION_TLS_CERT: /run/identity.pem
@@ -331,6 +332,7 @@ services:
       NOTIFICATION_SMTP_ALLOWED_SERVERS: ${TP_SMTP_ALLOWED_SERVERS:-}
       NOTIFICATION_SMTP_ALLOWED_CIDRS: ${TP_SMTP_ALLOWED_CIDRS:-}
     volumes:
+    - notification_smtp_settings:/var/lib/notification
     - ./config/native/notification-smtp.pem:/run/identity.pem:ro
   notification-unipush:
     image: ${TP_BACKEND_IMAGE:-registry.cn-hangzhou.aliyuncs.com/thingspanel/thingspanel-go:v1.4.0.1}
@@ -341,6 +343,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     networks: [thingspanel_network]
     environment:
+      NOTIFICATION_SETTINGS_FILE: /var/lib/notification/provider.json
       NOTIFICATION_PLUGIN_LISTEN: ":5443"
       NOTIFICATION_ALLOW_UNCONFIGURED: "true"
       NOTIFICATION_TLS_CERT: /run/identity.pem
@@ -354,6 +357,7 @@ services:
       NOTIFICATION_UNIPUSH_DEPLOYMENT_ID: ${TP_DEPLOYMENT_ID:-community}
       NOTIFICATION_UNIPUSH_APP_ID: ${APP_PUSH_APP_ID:-__UNI__71E31D5}
     volumes:
+    - notification_unipush_settings:/var/lib/notification
     - ./config/native/notification-unipush.pem:/run/identity.pem:ro
     - ./config/native/internal-ca.pem:/run/internal-ca.pem:ro
   notification-core:
@@ -426,6 +430,8 @@ services:
       retries: 24
       start_period: 30s
 volumes:
+  notification_smtp_settings: null
+  notification_unipush_settings: null
   agent_run: null
   go_files: null
   go_configs: null
